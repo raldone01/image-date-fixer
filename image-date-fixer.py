@@ -260,10 +260,9 @@ def process_file(file, config):
             f"EXIF date is in the future: {original_exif_date}. Setting to current time."
         )
         set_exif_date(file, datetime.now(), config)
-        return
 
     # skip if the file has an EXIF date
-    if original_exif_date:
+    elif original_exif_date:
         logging.debug(f"File has an EXIF date: {original_exif_date}")
         return
 
