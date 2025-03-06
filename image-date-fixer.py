@@ -62,7 +62,7 @@ def get_date_from_normal_date_prefixed_filepath(file_path: str) -> Optional[date
     """
     filename = os.path.basename(file_path)
     match = re.match(
-        r'^(\d{4})(?:-?(\d{2}))?(?:-?(\d{2}))?(?:-(\d{2})(\d{2})(\d{2}))?[\s\-_]', filename)
+        r'^(\d{4})(?:-?(\d{2}))?(?:-?(\d{2}))?(?:-(\d{2})(\d{2})(\d{2}))?[\s\-_a-zA-z]', filename)
     if match:
         year_m, month_m, day_m, hour_m, minute_m, second_m = match.groups()
 
@@ -143,6 +143,11 @@ def get_date_from_filepath(file_path: str) -> Optional[datetime]:
 
     for handler in handler_functions:
         date = handler(file_path)
+        # discard date if it is in the future
+        if date and date > datetime.now():
+            logging.debug(
+                f"Discarding extracted date {date} from {handler.__name__} as it is in the future.")
+            date = None
         if date:
             return date
 
