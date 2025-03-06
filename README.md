@@ -2,7 +2,9 @@
 
 ## Overview
 
-Image Date Fixer is a script that extracts possible timestamp information from filenames and sets the EXIF and modified times accordingly. It ensures that existing EXIF times are never overwritten and corrects dates that are too far in the future by adjusting them to the present.
+Image Date Fixer is a script that extracts possible timestamp information from filenames and sets the EXIF and modified times accordingly.
+It ensures that existing EXIF times are never overwritten and corrects dates that are too far in the future by adjusting them to the present.
+The only exception is when the EXIF time is in the future and the option to fix future dates is enabled.
 
 ## Features
 
