@@ -192,8 +192,9 @@ def set_exif_date(file: str, date: datetime, config) -> None:
 
     # use exiftool
     ret = subprocess.run(
-        ["exiftool", "-DateTimeOriginal=" +
-            date.strftime("%Y:%m:%d %H:%M:%S"), file]
+        ["exiftool",
+         "-overwrite_original",
+         "-DateTimeOriginal=" + date.strftime("%Y:%m:%d %H:%M:%S"), file]
     )
     if ret.returncode != 0:
         logging.error(f"Failed to set EXIF date of {file} to {date}")
