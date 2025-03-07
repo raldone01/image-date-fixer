@@ -200,8 +200,8 @@ def set_file_date(file: str, date: datetime, config) -> None:
         return
 
     # do not set modification times earlier than 1970
-    if date < datetime(1970, 1, 1):
-        date = datetime(1970, 1, 1)
+    if date < datetime(1970, 1, 2):
+        date = datetime(1970, 1, 2)
 
     os.utime(file, (date.timestamp(), date.timestamp()))
 
@@ -251,12 +251,12 @@ def process_file(file, config):
         )
         set_file_date(file, datetime.now(), config)
 
-    # check if the file timestamp is before 1-1-1970
-    if original_file_timestamp < datetime(1970, 1, 1):
+    # check if the file timestamp is before 2-1-1970
+    if original_file_timestamp < datetime(1970, 1, 2):
         logging.info(
-            f"File timestamp is before 1-1-1970: {original_file_timestamp}. Setting to 1-1-1970."
+            f"File timestamp is before 2-1-1970: {original_file_timestamp}. Setting to 2-1-1970."
         )
-        set_file_date(file, datetime(1970, 1, 1), config)
+        set_file_date(file, datetime(1970, 1, 2), config)
 
     # check that the file has an supported image extension
     if not file.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".heic", ".heif", ".avif", ".jfif", ".jpe", ".jif", ".jfi", ".raw")):
