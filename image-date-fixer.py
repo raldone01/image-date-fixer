@@ -266,12 +266,16 @@ def process_file(file, config):
     # get the EXIF date
     original_exif_date = get_exif_date(file)
 
-    if config.fix_future_dates and original_exif_date and original_exif_date > invalid_date_threshold:
+    if original_exif_date and original_exif_date < datetime(1970, 1, 2):
+        logging.info(
+            f"EXIF date is before 2-1-1970: {original_exif_date}. Setting to 2-1-1970."
+        )
+        set_exif_date(file, datetime(1970, 1, 2), config)
+    elif config.fix_future_dates and original_exif_date and original_exif_date > invalid_date_threshold:
         logging.info(
             f"EXIF date is in the future: {original_exif_date}. Setting to current time."
         )
         set_exif_date(file, datetime.now(), config)
-
     # skip if the file has an EXIF date
     elif original_exif_date:
         logging.debug(f"File has an EXIF date: {original_exif_date}")
