@@ -16,6 +16,15 @@ import shutil
 
 exit_flag = False
 
+"""
+TODO: add overview like this:
++---------+---------+-----+---------+---------+--------+--------------+
+| Folders | Files   | New | Updated | Removed | Errors | Elapsed time |
++---------+---------+-----+---------+---------+--------+--------------+
+| 59028   | 1216570 | 0   | 1855    | 0       | 0      | 00:12:58     |
++---------+---------+-----+---------+---------+--------+--------------+
+"""
+
 
 def get_date_from_android_filepath(file_path: str) -> Optional[datetime]:
     """
