@@ -35,13 +35,20 @@ use walkdir::WalkDir;
 fn get_date_for_file(
   file_path: &Path,
   file_name: &str,
+  process_state: &ProcessState,
 ) -> Option<(NaiveDateTime, date_extractors::DateConfidence)> {
+  // the uuid handler MUST come first!
   let handler_functions = vec![date_extractors::get_date_from_android_filepath_nom];
 
   for handler in handler_functions {
     let ret = handler(file_path, file_name);
-    if ret.is_some() {
-      return ret;
+    if let Some((date, confidence)) = ret {
+      // check if the date is in the future
+      if date > process_state.start_time {
+        // skip the handler if it returns an invalid date
+        continue;
+      }
+      return Some((date, confidence));
     }
   }
   None
@@ -313,10 +320,10 @@ fn process_file(file: &Path, process_state: &ProcessState) {
 
   // guess the date from the file path
   let file_name = file.file_name().unwrap().to_str().unwrap();
-  let guessed_date = get_date_for_file(file, file_name).or_else(|| {
+  let guessed_date = get_date_for_file(file, file_name, process_state).or_else(|| {
     let folder_path = file.parent().unwrap();
     let folder_name = folder_path.file_name().unwrap().to_str().unwrap();
-    get_date_for_file(folder_path, folder_name)
+    get_date_for_file(folder_path, folder_name, process_state)
   });
 
   // get the original exif date and its confidence
