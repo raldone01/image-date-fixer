@@ -83,7 +83,7 @@ pub fn get_date_from_android_filepath_regex(
 pub fn int_n<C: chumsky::text::Character, E: chumsky::Error<C>>(
   radix: u32,
   length: usize,
-) -> impl chumsky::Parser<C, C::Collection, Error = E> + Copy + Clone {
+) -> impl chumsky::Parser<C, C::Collection, Error = E> + Copy {
   use chumsky::prelude::*;
 
   filter(move |c: &C| c.is_digit(radix))
@@ -134,15 +134,15 @@ pub fn get_date_from_android_filepath_chumsky(
 #[cfg(test)]
 mod test {
   use super::*;
-  use lazy_static::lazy_static;
+  use std::sync::LazyLock;
 
   struct TestCase {
     file_path: &'static str,
     result: Option<(NaiveDateTime, DateConfidence)>,
   }
 
-  lazy_static! {
-    static ref TESTS_ANDROID_FILEPATH: [TestCase; 3] = [
+  static TESTS_ANDROID_FILEPATH: LazyLock<[TestCase; 3]> = LazyLock::new(|| {
+    [
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841.jpg",
         result: Some((
@@ -161,8 +161,8 @@ mod test {
         file_path: "/home/user/Pictures/IMG_20191318_130841POSTFIX.jpg",
         result: None,
       },
-    ];
-  }
+    ]
+  });
 
   fn test_test_cases(
     test_cases: &[TestCase],

@@ -322,7 +322,6 @@ dependencies = [
  "chumsky",
  "clap",
  "ctrlc",
- "lazy_static",
  "nom",
  "rayon",
  "regex",

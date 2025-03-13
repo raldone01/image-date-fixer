@@ -1,7 +1,7 @@
 //type ChumError = chumsky::error::Simple<char>;
 type ChumError = chumsky::error::Cheap<char>;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
 pub enum DateConfidence {
   None,
   Decade,
@@ -17,7 +17,7 @@ mod android_style_image_paths;
 pub use android_style_image_paths::*;
 
 /// Prints the reports from the vector of errors
-fn print_errors(errors: &Vec<ChumError>, source: &str) {
+fn print_errors(errors: &[ChumError], source: &str) {
   use ariadne::{Label, Report, ReportKind, Source};
 
   errors
