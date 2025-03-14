@@ -2,12 +2,14 @@
 #![allow(dead_code)]
 #![allow(missing_docs)]
 mod date_extractors;
+mod exiftool;
 
 use ariadne::{Color, Config, Label, Report, ReportKind, Source};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use chumsky::error::Cheap;
 use clap::{Arg, ArgAction, Command, command, value_parser};
 use date_extractors::get_date_for_file;
+use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
 use nom::{
   IResult,
   bytes::complete::{tag, take},
@@ -32,70 +34,6 @@ use std::{
 use tracing::{Level, debug, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
 use walkdir::WalkDir;
-
-fn has_exiftool() -> bool {
-  let output = process::Command::new("exiftool")
-    .arg("-ver")
-    .output()
-    .expect("Failed to run exiftool");
-
-  output.status.success()
-}
-
-fn get_exif_date(file: &Path) -> Option<NaiveDateTime> {
-  let output = process::Command::new("exiftool")
-    .arg("-DateTimeOriginal")
-    .arg("-d")
-    .arg("%Y-%m-%d %H:%M:%S")
-    .arg("-s3")
-    .arg(file)
-    .output()
-    .expect("Failed to run exiftool");
-
-  if !output.status.success() {
-    error!(
-      "\"{}\": Failed to get EXIF date. exiftool output: {}",
-      file.display(),
-      String::from_utf8(output.stderr).unwrap()
-    );
-    return None;
-  }
-
-  let date_str = String::from_utf8(output.stdout).unwrap();
-  NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S").ok()
-}
-
-fn set_exif_date(file: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
-  if process_state.dry_run {
-    info!(
-      "\"{}\": Would set EXIF date to {}",
-      file.display(),
-      date.format("%Y-%m-%d %H:%M:%S")
-    );
-    return true;
-  }
-
-  let date_str = date.format("%Y-%m-%d %H:%M:%S").to_string();
-  let output = process::Command::new("exiftool")
-    .arg("-overwrite_original")
-    .arg("-DateTimeOriginal=")
-    .arg(&date_str)
-    .arg(file)
-    .output()
-    .expect("Failed to run exiftool");
-
-  if !output.status.success() {
-    error!(
-      "\"{}\": Failed to set EXIF date to {}. exiftool output: {}",
-      file.display(),
-      date_str,
-      String::from_utf8(output.stderr).unwrap()
-    );
-    return false;
-  }
-
-  true
-}
 
 fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
   if process_state.dry_run {
@@ -164,10 +102,32 @@ struct ProcessState {
   stat_files_processed: AtomicUsize,
   stat_files_skipped: AtomicUsize,
   stat_files_errors: AtomicUsize,
-  stat_files_already_processed: AtomicUsize,
   stat_exif_updated: AtomicUsize,
   stat_exif_overwritten: AtomicUsize,
   stat_modified_time_updated: AtomicUsize,
+}
+
+impl ProcessState {
+  fn pretty_print_stats(&self) {
+    let folders_processed = self.stat_folders_processed.load(Ordering::Relaxed);
+    let folders_skipped = self.stat_folders_skipped.load(Ordering::Relaxed);
+    let files_processed = self.stat_files_processed.load(Ordering::Relaxed);
+    let files_skipped = self.stat_files_skipped.load(Ordering::Relaxed);
+    let files_errors = self.stat_files_errors.load(Ordering::Relaxed);
+    let exif_updated = self.stat_exif_updated.load(Ordering::Relaxed);
+    let exif_overwritten = self.stat_exif_overwritten.load(Ordering::Relaxed);
+    let modified_time_updated = self.stat_modified_time_updated.load(Ordering::Relaxed);
+
+    println!("Statistics:");
+    println!("  Folders processed: {}", folders_processed);
+    println!("  Folders skipped: {}", folders_skipped);
+    println!("  Files processed: {}", files_processed);
+    println!("  Files skipped: {}", files_skipped);
+    println!("  Files with errors: {}", files_errors);
+    println!("  EXIF dates updated: {}", exif_updated);
+    println!("  EXIF dates overwritten: {}", exif_overwritten);
+    println!("  Modified times updated: {}", modified_time_updated);
+  }
 }
 
 fn process_dir(dir: &Path, process_state: &ProcessState) {
@@ -242,37 +202,6 @@ fn get_confidence_of_naive(naive: &NaiveDateTime) -> date_extractors::DateConfid
     return date_extractors::DateConfidence::Year;
   }
   date_extractors::DateConfidence::Decade
-}
-
-fn exif_tool_writable_file_extensions() -> &'static BTreeSet<String> {
-  static SUPPORTED_EXTENSIONS: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
-    // run exiftool to get the list of writable file extensions
-    let output = process::Command::new("exiftool")
-      .arg("-listwf")
-      .output()
-      .expect("Failed to run exiftool");
-
-    if !output.status.success() {
-      error!(
-        "Failed to get list of writable file extensions. exiftool output: {}",
-        String::from_utf8(output.stderr).unwrap()
-      );
-      exit(1);
-    }
-
-    let output_str = String::from_utf8(output.stdout).unwrap();
-    let mut extensions = BTreeSet::new();
-    for line in output_str.lines() {
-      if line.starts_with("Writable file extensions:") {
-        continue;
-      }
-      for extension in line.split_whitespace() {
-        extensions.insert(extension.to_string());
-      }
-    }
-    extensions
-  });
-  &SUPPORTED_EXTENSIONS
 }
 
 fn process_file(file: &Path, process_state: &ProcessState) {
@@ -357,8 +286,9 @@ fn process_file(file: &Path, process_state: &ProcessState) {
     );
   }
 
+  let mut original_exif_confidence = date_extractors::DateConfidence::None;
   if let Some(original_exif_date) = original_exif_date {
-    let original_exif_confidence = get_confidence_of_naive(&original_exif_date);
+    original_exif_confidence = get_confidence_of_naive(&original_exif_date);
     debug!(
       "\"{}\": Original EXIF date: {} (confidence: {:?})",
       file.display(),
@@ -373,7 +303,7 @@ fn process_file(file: &Path, process_state: &ProcessState) {
         file.display(),
         original_exif_date.format("%Y-%m-%d %H:%M:%S")
       );
-      if !set_exif_date(file, &process_state.start_time, process_state) {
+      if !set_exif_date(file, &process_state.start_time, process_state.dry_run) {
         error!("\"{}\": Failed to set EXIF date", file.display());
         process_state
           .stat_files_errors
@@ -381,10 +311,10 @@ fn process_file(file: &Path, process_state: &ProcessState) {
         return;
       }
     }
-
-    if let Some((date, confidence)) = guessed_date {
-      // overwrite the exif date if the guessed date has a higher confidence
-      if confidence > original_exif_confidence {
+  }
+  if let Some((date, confidence)) = guessed_date {
+    if confidence > original_exif_confidence {
+      if let Some(original_exif_date) = original_exif_date {
         info!(
           "\"{}\": Overwriting EXIF date {} (confidence: {:?}) with guessed date {} (confidence: {:?})",
           file.display(),
@@ -393,15 +323,28 @@ fn process_file(file: &Path, process_state: &ProcessState) {
           date.format("%Y-%m-%d %H:%M:%S"),
           confidence
         );
-        if !set_exif_date(file, &date, process_state) {
-          error!("\"{}\": Failed to set EXIF date", file.display());
-          process_state
-            .stat_files_errors
-            .fetch_add(1, Ordering::Relaxed);
-          return;
-        }
+      } else {
+        info!(
+          "\"{}\": Setting EXIF date to guessed date {} (confidence: {:?})",
+          file.display(),
+          date.format("%Y-%m-%d %H:%M:%S"),
+          confidence
+        );
+      }
+      if !set_exif_date(file, &date, process_state.dry_run) {
+        error!("\"{}\": Failed to set EXIF date", file.display());
+        process_state
+          .stat_files_errors
+          .fetch_add(1, Ordering::Relaxed);
+        return;
+      }
+      if original_exif_date.is_some() {
         process_state
           .stat_exif_overwritten
+          .fetch_add(1, Ordering::Relaxed);
+      } else {
+        process_state
+          .stat_exif_updated
           .fetch_add(1, Ordering::Relaxed);
       }
     }
@@ -530,6 +473,7 @@ fn main() {
         println!();
       }
     }
+    println!();
   }
 
   let process_state = Arc::new(ProcessState {
@@ -545,7 +489,6 @@ fn main() {
     stat_files_processed: AtomicUsize::new(0),
     stat_files_skipped: AtomicUsize::new(0),
     stat_files_errors: AtomicUsize::new(0),
-    stat_files_already_processed: AtomicUsize::new(0),
     stat_exif_updated: AtomicUsize::new(0),
     stat_exif_overwritten: AtomicUsize::new(0),
     stat_modified_time_updated: AtomicUsize::new(0),
@@ -560,7 +503,7 @@ fn main() {
   })
   .expect("Error setting Ctrl+C handler");
 
-  files.flatten().par_bridge().for_each(move |file| {
+  files.flatten().par_bridge().for_each(|file| {
     // check if the file is a directory
     if file.is_dir() {
       process_dir(file, &process_state);
@@ -568,4 +511,8 @@ fn main() {
       process_file(file, &process_state);
     }
   });
+
+  if print_stats {
+    process_state.pretty_print_stats();
+  }
 }
