@@ -107,6 +107,28 @@ struct ProcessState {
   stat_modified_time_updated: AtomicUsize,
 }
 
+fn pretty_duration(duration: Duration) -> String {
+  let mut duration = duration;
+  let mut result = String::new();
+  if duration.as_secs() >= 86400 {
+    let days = duration.as_secs() / 86400;
+    result.push_str(&format!("{}d ", days));
+    duration -= Duration::from_secs(days * 86400);
+  }
+  if duration.as_secs() >= 3600 {
+    let hours = duration.as_secs() / 3600;
+    result.push_str(&format!("{}h ", hours));
+    duration -= Duration::from_secs(hours * 3600);
+  }
+  if duration.as_secs() >= 60 {
+    let minutes = duration.as_secs() / 60;
+    result.push_str(&format!("{}m ", minutes));
+    duration -= Duration::from_secs(minutes * 60);
+  }
+  result.push_str(&format!("{}s ", duration.as_secs()));
+  result
+}
+
 impl ProcessState {
   fn pretty_print_stats(&self) {
     let folders_processed = self.stat_folders_processed.load(Ordering::Relaxed);
@@ -127,6 +149,10 @@ impl ProcessState {
     println!("  EXIF dates updated: {}", exif_updated);
     println!("  EXIF dates overwritten: {}", exif_overwritten);
     println!("  Modified times updated: {}", modified_time_updated);
+    let std_duration = (Local::now().naive_local() - self.start_time).to_std();
+    if let Ok(std_duration) = std_duration {
+      println!("  Time taken: {}", pretty_duration(std_duration));
+    }
   }
 }
 
