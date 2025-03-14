@@ -4,9 +4,10 @@
 mod date_extractors;
 
 use ariadne::{Color, Config, Label, Report, ReportKind, Source};
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use chumsky::error::Cheap;
 use clap::{Arg, ArgAction, Command, command, value_parser};
+use date_extractors::get_date_for_file;
 use nom::{
   IResult,
   bytes::complete::{tag, take},
@@ -20,7 +21,7 @@ use regex::Regex;
 use std::{
   collections::BTreeSet,
   path::{Path, PathBuf},
-  process,
+  process::{self, exit},
   str::FromStr,
   sync::{
     Arc, LazyLock,
@@ -31,28 +32,6 @@ use std::{
 use tracing::{Level, debug, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
 use walkdir::WalkDir;
-
-fn get_date_for_file(
-  file_path: &Path,
-  file_name: &str,
-  process_state: &ProcessState,
-) -> Option<(NaiveDateTime, date_extractors::DateConfidence)> {
-  // the uuid handler MUST come first!
-  let handler_functions = vec![date_extractors::get_date_from_android_filepath_nom];
-
-  for handler in handler_functions {
-    let ret = handler(file_path, file_name);
-    if let Some((date, confidence)) = ret {
-      // check if the date is in the future
-      if date > process_state.start_time {
-        // skip the handler if it returns an invalid date
-        continue;
-      }
-      return Some((date, confidence));
-    }
-  }
-  None
-}
 
 fn has_exiftool() -> bool {
   let output = process::Command::new("exiftool")
@@ -180,15 +159,15 @@ struct ProcessState {
   modified_times_future_threshold: NaiveDateTime,
   exif_dates_future_threshold: NaiveDateTime,
 
-  folders_processed: AtomicUsize,
-  folders_skipped: AtomicUsize,
-  files_processed: AtomicUsize,
-  files_skipped: AtomicUsize,
-  files_errors: AtomicUsize,
-  files_already_processed: AtomicUsize,
-  exif_updated: AtomicUsize,
-  exif_overwritten: AtomicUsize,
-  modified_time_updated: AtomicUsize,
+  stat_folders_processed: AtomicUsize,
+  stat_folders_skipped: AtomicUsize,
+  stat_files_processed: AtomicUsize,
+  stat_files_skipped: AtomicUsize,
+  stat_files_errors: AtomicUsize,
+  stat_files_already_processed: AtomicUsize,
+  stat_exif_updated: AtomicUsize,
+  stat_exif_overwritten: AtomicUsize,
+  stat_modified_time_updated: AtomicUsize,
 }
 
 fn process_dir(dir: &Path, process_state: &ProcessState) {
@@ -198,13 +177,13 @@ fn process_dir(dir: &Path, process_state: &ProcessState) {
 
   if process_state.excluded_files.contains(&dir.to_path_buf()) {
     process_state
-      .folders_skipped
+      .stat_folders_skipped
       .fetch_add(1, Ordering::Relaxed);
     return;
   }
 
   process_state
-    .folders_processed
+    .stat_folders_processed
     .fetch_add(1, Ordering::Relaxed);
 
   info!("\"{}\": Processing directory", dir.display());
@@ -221,7 +200,9 @@ fn process_dir(dir: &Path, process_state: &ProcessState) {
 
     let path = entry.path();
     if process_state.excluded_files.contains(&path.to_path_buf()) {
-      process_state.files_skipped.fetch_add(1, Ordering::Relaxed);
+      process_state
+        .stat_files_skipped
+        .fetch_add(1, Ordering::Relaxed);
       return;
     }
 
@@ -263,17 +244,38 @@ fn get_confidence_of_naive(naive: &NaiveDateTime) -> date_extractors::DateConfid
   date_extractors::DateConfidence::Decade
 }
 
-fn process_file(file: &Path, process_state: &ProcessState) {
-  static IMAGE_EXTENSIONS: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
-    [
-      ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".heic", ".heif", ".avif",
-      ".jfif", ".jpe", ".jif", ".jfi", ".raw",
-    ]
-    .iter()
-    .copied()
-    .collect()
-  });
+fn exif_tool_writable_file_extensions() -> &'static BTreeSet<String> {
+  static SUPPORTED_EXTENSIONS: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
+    // run exiftool to get the list of writable file extensions
+    let output = process::Command::new("exiftool")
+      .arg("-listwf")
+      .output()
+      .expect("Failed to run exiftool");
 
+    if !output.status.success() {
+      error!(
+        "Failed to get list of writable file extensions. exiftool output: {}",
+        String::from_utf8(output.stderr).unwrap()
+      );
+      exit(1);
+    }
+
+    let output_str = String::from_utf8(output.stdout).unwrap();
+    let mut extensions = BTreeSet::new();
+    for line in output_str.lines() {
+      if line.starts_with("Writable file extensions:") {
+        continue;
+      }
+      for extension in line.split_whitespace() {
+        extensions.insert(extension.to_string());
+      }
+    }
+    extensions
+  });
+  &SUPPORTED_EXTENSIONS
+}
+
+fn process_file(file: &Path, process_state: &ProcessState) {
   info!("\"{}\": Processing file", file.display());
 
   let original_file_modified_time = get_modified_time(file);
@@ -288,7 +290,9 @@ fn process_file(file: &Path, process_state: &ProcessState) {
       );
       if !set_modified_time(file, &process_state.start_time, process_state) {
         error!("\"{}\": Failed to set modified time", file.display());
-        process_state.files_errors.fetch_add(1, Ordering::Relaxed);
+        process_state
+          .stat_files_errors
+          .fetch_add(1, Ordering::Relaxed);
         return;
       }
     }
@@ -301,29 +305,39 @@ fn process_file(file: &Path, process_state: &ProcessState) {
       );
       if !set_modified_time(file, &OLD_MODIFIED_TIME_THRESHOLD, process_state) {
         error!("\"{}\": Failed to set modified time", file.display());
-        process_state.files_errors.fetch_add(1, Ordering::Relaxed);
+        process_state
+          .stat_files_errors
+          .fetch_add(1, Ordering::Relaxed);
         return;
       }
     }
   }
 
-  let file_extension = file.extension().and_then(|ext| ext.to_str());
+  let file_extension = file
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .map(str::to_ascii_uppercase);
+
   // check that the file extension is a valid image extension
-  if !IMAGE_EXTENSIONS.contains(file_extension.unwrap_or_default()) {
+  if file_extension.is_some_and(|ext| !exif_tool_writable_file_extensions().contains(&ext)) {
     info!(
       "\"{}\": File is not an image file. Skipping.",
       file.display()
     );
-    process_state.files_skipped.fetch_add(1, Ordering::Relaxed);
+    process_state
+      .stat_files_skipped
+      .fetch_add(1, Ordering::Relaxed);
     return;
   }
 
+  let current_time = Local::now().naive_local();
+
   // guess the date from the file path
   let file_name = file.file_name().unwrap().to_str().unwrap();
-  let guessed_date = get_date_for_file(file, file_name, process_state).or_else(|| {
+  let guessed_date = get_date_for_file(file, file_name, current_time).or_else(|| {
     let folder_path = file.parent().unwrap();
     let folder_name = folder_path.file_name().unwrap().to_str().unwrap();
-    get_date_for_file(folder_path, folder_name, process_state)
+    get_date_for_file(folder_path, folder_name, current_time)
   });
 
   // get the original exif date and its confidence
@@ -361,7 +375,9 @@ fn process_file(file: &Path, process_state: &ProcessState) {
       );
       if !set_exif_date(file, &process_state.start_time, process_state) {
         error!("\"{}\": Failed to set EXIF date", file.display());
-        process_state.files_errors.fetch_add(1, Ordering::Relaxed);
+        process_state
+          .stat_files_errors
+          .fetch_add(1, Ordering::Relaxed);
         return;
       }
     }
@@ -379,11 +395,13 @@ fn process_file(file: &Path, process_state: &ProcessState) {
         );
         if !set_exif_date(file, &date, process_state) {
           error!("\"{}\": Failed to set EXIF date", file.display());
-          process_state.files_errors.fetch_add(1, Ordering::Relaxed);
+          process_state
+            .stat_files_errors
+            .fetch_add(1, Ordering::Relaxed);
           return;
         }
         process_state
-          .exif_overwritten
+          .stat_exif_overwritten
           .fetch_add(1, Ordering::Relaxed);
       }
     }
@@ -394,44 +412,56 @@ fn main() {
   let matches = command!()
         .about("Extracts possible timestamp information from filenames and sets EXIF and modified times accordingly.")
         .arg(
-            Arg::new("file")
-                .long("file")
-                .help("Files or directories to process")
-                .num_args(1..)
-                .value_name("FILES")
-                .value_parser(value_parser!(PathBuf)),
+          Arg::new("file")
+          .long("file")
+          .help("Files or directories to process")
+          .num_args(1..)
+          .value_name("FILES")
+          .value_parser(value_parser!(PathBuf)),
         )
         .arg(
-            Arg::new("exclude-files")
-                .long("exclude-files")
-                .help("Files or directories to exclude")
-                .num_args(1..)
-                .value_name("FILES")
-                .value_parser(value_parser!(PathBuf)),
+          Arg::new("exclude-files")
+          .long("exclude-files")
+          .help("Files or directories to exclude")
+          .num_args(1..)
+          .value_name("FILES")
+          .value_parser(value_parser!(PathBuf)),
         )
         .arg(
-            Arg::new("log-level")
-                .long("log-level")
-                .help("Log level")
-                .value_parser(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
+          Arg::new("log-level")
+          .long("log-level")
+          .help("Log level")
+          .value_parser(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
         )
         .arg(
-            Arg::new("fix-future-modified-times")
-                .long("fix-future-modified-times")
-                .help("Fix modified times that are this many days in the future")
-                .value_parser(value_parser!(u64)),
+          Arg::new("fix-future-modified-times")
+          .long("fix-future-modified-times")
+          .help("Fix modified times that are this many days in the future")
+          .value_parser(value_parser!(u64)),
         )
         .arg(
-            Arg::new("fix-future-exif-dates")
-                .long("fix-future-exif-dates")
-                .help("Fix exif dates that are this many days in the future")
-                .value_parser(value_parser!(u64)),
+          Arg::new("fix-future-exif-dates")
+          .long("fix-future-exif-dates")
+          .help("Fix exif dates that are this many days in the future")
+          .value_parser(value_parser!(u64)),
         )
         .arg(
-            Arg::new("dry-run")
-                .long("dry-run")
-                .help("Perform a dry run")
-                .action(ArgAction::SetTrue),
+          Arg::new("dry-run")
+          .long("dry-run")
+          .help("Perform a dry run")
+          .action(ArgAction::SetTrue),
+        )
+        .arg(
+          Arg::new("print-supported-file-extensions")
+          .long("print-supported-file-extensions")
+          .help("Print the list of supported file extensions")
+          .action(ArgAction::SetTrue),
+        )
+        .arg(
+          Arg::new("print-stats")
+          .long("print-stats")
+          .help("Print statistics")
+          .action(ArgAction::SetTrue)
         )
         .get_matches();
 
@@ -456,14 +486,14 @@ fn main() {
 
   if !has_exiftool() {
     error!("exiftool is not installed. Make sure it is installed and in your PATH.");
-    process::exit(1);
+    exit(1);
   }
 
   let fix_future_modified_times_day_offset =
     matches.get_one::<u64>("fix-future-modified-times").copied();
   let modified_times_future_threshold = fix_future_modified_times_day_offset
     .and_then(|invalid_modified_times_days| {
-      chrono::Local::now()
+      Local::now()
         .naive_local()
         .checked_add_days(chrono::Days::new(invalid_modified_times_days))
     })
@@ -472,31 +502,53 @@ fn main() {
   let fix_future_exif_dates_day_offset = matches.get_one::<u64>("fix-future-exif-dates").copied();
   let exif_dates_future_threshold = fix_future_exif_dates_day_offset
     .and_then(|invalid_exif_dates_days| {
-      chrono::Local::now()
+      Local::now()
         .naive_local()
         .checked_add_days(chrono::Days::new(invalid_exif_dates_days))
     })
     .unwrap_or(NaiveDateTime::MAX);
 
   let dry_run = matches.get_one::<bool>("dry-run").copied().unwrap_or(false);
+  let print_supported_file_extensions = matches
+    .get_one::<bool>("print-supported-file-extensions")
+    .copied()
+    .unwrap_or(false);
+  let print_stats = matches
+    .get_one::<bool>("print-stats")
+    .copied()
+    .unwrap_or(false);
+
+  if print_supported_file_extensions {
+    println!("Supported file extensions:");
+    let items_per_line = 10;
+    for (i, extension) in exif_tool_writable_file_extensions().iter().enumerate() {
+      if i % items_per_line == 0 {
+        print!("  ");
+      }
+      print!("{} ", extension);
+      if (i + 1) % items_per_line == 0 {
+        println!();
+      }
+    }
+  }
 
   let process_state = Arc::new(ProcessState {
     excluded_files: exclude_files.flatten().cloned().collect(),
     exit_flag: AtomicBool::new(true),
-    start_time: chrono::Local::now().naive_local(),
+    start_time: Local::now().naive_local(),
     dry_run,
     modified_times_future_threshold,
     exif_dates_future_threshold,
 
-    folders_processed: AtomicUsize::new(0),
-    folders_skipped: AtomicUsize::new(0),
-    files_processed: AtomicUsize::new(0),
-    files_skipped: AtomicUsize::new(0),
-    files_errors: AtomicUsize::new(0),
-    files_already_processed: AtomicUsize::new(0),
-    exif_updated: AtomicUsize::new(0),
-    exif_overwritten: AtomicUsize::new(0),
-    modified_time_updated: AtomicUsize::new(0),
+    stat_folders_processed: AtomicUsize::new(0),
+    stat_folders_skipped: AtomicUsize::new(0),
+    stat_files_processed: AtomicUsize::new(0),
+    stat_files_skipped: AtomicUsize::new(0),
+    stat_files_errors: AtomicUsize::new(0),
+    stat_files_already_processed: AtomicUsize::new(0),
+    stat_exif_updated: AtomicUsize::new(0),
+    stat_exif_overwritten: AtomicUsize::new(0),
+    stat_modified_time_updated: AtomicUsize::new(0),
   });
 
   let ctrlc_process_state = process_state.clone();

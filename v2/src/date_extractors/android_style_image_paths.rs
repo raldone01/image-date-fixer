@@ -132,16 +132,12 @@ pub fn get_date_from_android_filepath_chumsky(
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
   use super::*;
+  use crate::date_extractors::test::TestCase;
   use std::sync::LazyLock;
 
-  struct TestCase {
-    file_path: &'static str,
-    result: Option<(NaiveDateTime, DateConfidence)>,
-  }
-
-  static TESTS_ANDROID_FILEPATH: LazyLock<[TestCase; 3]> = LazyLock::new(|| {
+  pub static TESTS_ANDROID_FILEPATH: LazyLock<[TestCase; 3]> = LazyLock::new(|| {
     [
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841.jpg",
