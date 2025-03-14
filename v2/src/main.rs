@@ -22,6 +22,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use std::{
   collections::BTreeSet,
+  fmt::Write,
   path::{Path, PathBuf},
   process::{self, exit},
   str::FromStr,
@@ -89,6 +90,29 @@ fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
   Some(modified_date_time.naive_utc())
 }
 
+fn pretty_duration(duration: Duration) -> String {
+  let mut duration = duration;
+  let mut result = String::new();
+  if duration.as_secs() >= 86400 {
+    let days = duration.as_secs() / 86400;
+    write!(result, "{days}d ").unwrap();
+    duration -= Duration::from_secs(days * 86400);
+  }
+  if duration.as_secs() >= 3600 {
+    let hours = duration.as_secs() / 3600;
+    write!(result, "{hours}h ").unwrap();
+    duration -= Duration::from_secs(hours * 3600);
+  }
+  if duration.as_secs() >= 60 {
+    let minutes = duration.as_secs() / 60;
+    write!(result, "{minutes}m ").unwrap();
+    duration -= Duration::from_secs(minutes * 60);
+  }
+  let seconds = duration.as_secs();
+  write!(result, "{seconds}s").unwrap();
+  result
+}
+
 struct ProcessState {
   excluded_files: BTreeSet<PathBuf>,
   exit_flag: AtomicBool,
@@ -107,29 +131,32 @@ struct ProcessState {
   stat_modified_time_updated: AtomicUsize,
 }
 
-fn pretty_duration(duration: Duration) -> String {
-  let mut duration = duration;
-  let mut result = String::new();
-  if duration.as_secs() >= 86400 {
-    let days = duration.as_secs() / 86400;
-    result.push_str(&format!("{}d ", days));
-    duration -= Duration::from_secs(days * 86400);
-  }
-  if duration.as_secs() >= 3600 {
-    let hours = duration.as_secs() / 3600;
-    result.push_str(&format!("{}h ", hours));
-    duration -= Duration::from_secs(hours * 3600);
-  }
-  if duration.as_secs() >= 60 {
-    let minutes = duration.as_secs() / 60;
-    result.push_str(&format!("{}m ", minutes));
-    duration -= Duration::from_secs(minutes * 60);
-  }
-  result.push_str(&format!("{}s ", duration.as_secs()));
-  result
-}
-
 impl ProcessState {
+  fn new(
+    excluded_files: BTreeSet<PathBuf>,
+    dry_run: bool,
+    modified_times_future_threshold: NaiveDateTime,
+    exif_dates_future_threshold: NaiveDateTime,
+  ) -> Self {
+    Self {
+      excluded_files,
+      exit_flag: AtomicBool::new(true),
+      start_time: Local::now().naive_local(),
+      dry_run,
+      modified_times_future_threshold,
+      exif_dates_future_threshold,
+
+      stat_folders_processed: AtomicUsize::new(0),
+      stat_folders_skipped: AtomicUsize::new(0),
+      stat_files_processed: AtomicUsize::new(0),
+      stat_files_skipped: AtomicUsize::new(0),
+      stat_files_errors: AtomicUsize::new(0),
+      stat_exif_updated: AtomicUsize::new(0),
+      stat_exif_overwritten: AtomicUsize::new(0),
+      stat_modified_time_updated: AtomicUsize::new(0),
+    }
+  }
+
   fn pretty_print_stats(&self) {
     let folders_processed = self.stat_folders_processed.load(Ordering::Relaxed);
     let folders_skipped = self.stat_folders_skipped.load(Ordering::Relaxed);
@@ -141,14 +168,14 @@ impl ProcessState {
     let modified_time_updated = self.stat_modified_time_updated.load(Ordering::Relaxed);
 
     println!("Statistics:");
-    println!("  Folders processed: {}", folders_processed);
-    println!("  Folders skipped: {}", folders_skipped);
-    println!("  Files processed: {}", files_processed);
-    println!("  Files skipped: {}", files_skipped);
-    println!("  Files with errors: {}", files_errors);
-    println!("  EXIF dates updated: {}", exif_updated);
-    println!("  EXIF dates overwritten: {}", exif_overwritten);
-    println!("  Modified times updated: {}", modified_time_updated);
+    println!("  Folders processed: {folders_processed}");
+    println!("  Folders skipped: {folders_skipped}");
+    println!("  Files processed: {files_processed}");
+    println!("  Files skipped: {files_skipped}");
+    println!("  Files with errors: {files_errors}");
+    println!("  EXIF dates updated: {exif_updated}");
+    println!("  EXIF dates overwritten: {exif_overwritten}");
+    println!("  Modified times updated: {modified_time_updated}");
     let std_duration = (Local::now().naive_local() - self.start_time).to_std();
     if let Ok(std_duration) = std_duration {
       println!("  Time taken: {}", pretty_duration(std_duration));
@@ -377,69 +404,75 @@ fn process_file(file: &Path, process_state: &ProcessState) {
   }
 }
 
+fn new_argparser() -> clap::Command {
+  command!()
+  .about("Extracts possible timestamp information from filenames and sets EXIF and modified times accordingly.")
+  .arg(
+    Arg::new("file")
+    .long("file")
+    .help("Files or directories to process")
+    .num_args(1..)
+    .value_name("FILES")
+    .value_parser(value_parser!(PathBuf)),
+  )
+  .arg(
+    Arg::new("exclude-files")
+    .long("exclude-files")
+    .help("Files or directories to exclude")
+    .num_args(1..)
+    .value_name("FILES")
+    .value_parser(value_parser!(PathBuf)),
+  )
+  .arg(
+    Arg::new("log-level")
+    .long("log-level")
+    .help("Log level")
+    .value_parser(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
+  )
+  .arg(
+    Arg::new("fix-future-modified-times")
+    .long("fix-future-modified-times")
+    .help("Fix modified times that are this many days in the future")
+    .value_parser(value_parser!(u64)),
+  )
+  .arg(
+    Arg::new("fix-future-exif-dates")
+    .long("fix-future-exif-dates")
+    .help("Fix exif dates that are this many days in the future")
+    .value_parser(value_parser!(u64)),
+  )
+  .arg(
+    Arg::new("dry-run")
+    .long("dry-run")
+    .help("Perform a dry run")
+    .action(ArgAction::SetTrue),
+  )
+  .arg(
+    Arg::new("print-supported-file-extensions")
+    .long("print-supported-file-extensions")
+    .help("Print the list of supported file extensions")
+    .action(ArgAction::SetTrue),
+  )
+  .arg(
+    Arg::new("print-stats")
+    .long("print-stats")
+    .help("Print statistics")
+    .action(ArgAction::SetTrue)
+  )
+}
+
 fn main() {
-  let matches = command!()
-        .about("Extracts possible timestamp information from filenames and sets EXIF and modified times accordingly.")
-        .arg(
-          Arg::new("file")
-          .long("file")
-          .help("Files or directories to process")
-          .num_args(1..)
-          .value_name("FILES")
-          .value_parser(value_parser!(PathBuf)),
-        )
-        .arg(
-          Arg::new("exclude-files")
-          .long("exclude-files")
-          .help("Files or directories to exclude")
-          .num_args(1..)
-          .value_name("FILES")
-          .value_parser(value_parser!(PathBuf)),
-        )
-        .arg(
-          Arg::new("log-level")
-          .long("log-level")
-          .help("Log level")
-          .value_parser(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
-        )
-        .arg(
-          Arg::new("fix-future-modified-times")
-          .long("fix-future-modified-times")
-          .help("Fix modified times that are this many days in the future")
-          .value_parser(value_parser!(u64)),
-        )
-        .arg(
-          Arg::new("fix-future-exif-dates")
-          .long("fix-future-exif-dates")
-          .help("Fix exif dates that are this many days in the future")
-          .value_parser(value_parser!(u64)),
-        )
-        .arg(
-          Arg::new("dry-run")
-          .long("dry-run")
-          .help("Perform a dry run")
-          .action(ArgAction::SetTrue),
-        )
-        .arg(
-          Arg::new("print-supported-file-extensions")
-          .long("print-supported-file-extensions")
-          .help("Print the list of supported file extensions")
-          .action(ArgAction::SetTrue),
-        )
-        .arg(
-          Arg::new("print-stats")
-          .long("print-stats")
-          .help("Print statistics")
-          .action(ArgAction::SetTrue)
-        )
-        .get_matches();
+  let matches = new_argparser().get_matches();
 
   let files = matches
     .get_occurrences::<PathBuf>("file")
     .unwrap_or_default();
-  let exclude_files = matches
+  let excluded_files = matches
     .get_occurrences::<PathBuf>("exclude-files")
-    .unwrap_or_default();
+    .unwrap_or_default()
+    .flatten()
+    .cloned()
+    .collect();
 
   // set the correct log level
   let log_level = matches
@@ -494,7 +527,7 @@ fn main() {
       if i % items_per_line == 0 {
         print!("  ");
       }
-      print!("{} ", extension);
+      print!("{extension} ");
       if (i + 1) % items_per_line == 0 {
         println!();
       }
@@ -502,23 +535,12 @@ fn main() {
     println!();
   }
 
-  let process_state = Arc::new(ProcessState {
-    excluded_files: exclude_files.flatten().cloned().collect(),
-    exit_flag: AtomicBool::new(true),
-    start_time: Local::now().naive_local(),
+  let process_state = Arc::new(ProcessState::new(
+    excluded_files,
     dry_run,
     modified_times_future_threshold,
     exif_dates_future_threshold,
-
-    stat_folders_processed: AtomicUsize::new(0),
-    stat_folders_skipped: AtomicUsize::new(0),
-    stat_files_processed: AtomicUsize::new(0),
-    stat_files_skipped: AtomicUsize::new(0),
-    stat_files_errors: AtomicUsize::new(0),
-    stat_exif_updated: AtomicUsize::new(0),
-    stat_exif_overwritten: AtomicUsize::new(0),
-    stat_modified_time_updated: AtomicUsize::new(0),
-  });
+  ));
 
   let ctrlc_process_state = process_state.clone();
   ctrlc::set_handler(move || {

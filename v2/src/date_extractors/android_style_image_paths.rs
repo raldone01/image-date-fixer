@@ -57,7 +57,9 @@ fn parse_num<const N: usize>(num: &str) -> IResult<&str, u32> {
   map_res(take(N), u32::from_str).parse(num)
 }
 
-/// /storage/emulated/0/DCIM/Camera/IMG_20190818_130841POSTFIX.jpg
+/// Extracts the date from Android-style image file paths.
+/// Example file paths:
+///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841POSTFIX.jpg
 pub fn get_date_from_android_filepath_regex(
   _file_path: &Path,
   file_name: &str,
@@ -134,7 +136,7 @@ pub fn get_date_from_android_filepath_chumsky(
 #[cfg(test)]
 pub mod test {
   use super::*;
-  use crate::date_extractors::test::TestCase;
+  use crate::date_extractors::test::{TestCase, test_test_cases};
   use std::sync::LazyLock;
 
   pub static TESTS_ANDROID_FILEPATH: LazyLock<[TestCase; 3]> = LazyLock::new(|| {
@@ -159,18 +161,6 @@ pub mod test {
       },
     ]
   });
-
-  fn test_test_cases(
-    test_cases: &[TestCase],
-    parser: fn(&Path, &str) -> Option<(NaiveDateTime, DateConfidence)>,
-  ) {
-    for test_case in test_cases {
-      let file_path = Path::new(test_case.file_path);
-      let file_name = file_path.file_name().unwrap().to_str().unwrap();
-      let result = parser(file_path, file_name);
-      assert_eq!(result, test_case.result);
-    }
-  }
 
   #[test]
   fn android_filepath_nom() {

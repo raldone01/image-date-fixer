@@ -14,10 +14,13 @@ pub enum DateConfidence {
 }
 
 mod android_style_image_paths;
-use std::path::Path;
-
 pub use android_style_image_paths::*;
+
+mod whatsapp_style_image_paths;
+pub use whatsapp_style_image_paths::*;
+
 use chrono::NaiveDateTime;
+use std::path::Path;
 
 /// Prints the reports from the vector of errors
 pub fn print_chumsky_errors(errors: &[ChumError], source: &str) {
@@ -41,7 +44,10 @@ pub fn get_date_for_file(
   current_time: NaiveDateTime,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
   // the uuid handler MUST come first!
-  let handler_functions = vec![get_date_from_android_filepath_nom];
+  let handler_functions = vec![
+    get_date_from_android_filepath_nom,
+    get_date_from_whatsapp_filepath_regex,
+  ];
 
   for handler in handler_functions {
     let ret = handler(file_path, file_name);
@@ -59,6 +65,8 @@ pub fn get_date_for_file(
 
 #[cfg(test)]
 mod test {
+  use crate::date_extractors::whatsapp_style_image_paths::test::TESTS_WHATSAPP_FILEPATH;
+
   use super::{android_style_image_paths::test::TESTS_ANDROID_FILEPATH, *};
   use rand::seq::SliceRandom;
   use std::sync::LazyLock;
@@ -67,6 +75,22 @@ mod test {
   pub struct TestCase {
     pub file_path: &'static str,
     pub result: Option<(NaiveDateTime, DateConfidence)>,
+  }
+
+  pub fn test_test_cases(
+    test_cases: &[TestCase],
+    parser: fn(&Path, &str) -> Option<(NaiveDateTime, DateConfidence)>,
+  ) {
+    for test_case in test_cases {
+      let file_path = Path::new(test_case.file_path);
+      let file_name = file_path.file_name().unwrap().to_str().unwrap();
+      let result = parser(file_path, file_name);
+      assert_eq!(
+        result, test_case.result,
+        "Failed for {}",
+        test_case.file_path
+      );
+    }
   }
 
   #[test]
@@ -80,8 +104,13 @@ mod test {
   }
 
   fn get_all_test_data() -> Vec<TestCase> {
-    static ALL_TEST_CASES: LazyLock<Vec<TestCase>> =
-      LazyLock::new(|| vec![TESTS_ANDROID_FILEPATH.as_slice()].concat());
+    static ALL_TEST_CASES: LazyLock<Vec<TestCase>> = LazyLock::new(|| {
+      [
+        TESTS_ANDROID_FILEPATH.as_slice(),
+        TESTS_WHATSAPP_FILEPATH.as_slice(),
+      ]
+      .concat()
+    });
     // shuffle the test cases
     let mut rng = rand::rng();
     let mut test_cases = ALL_TEST_CASES.clone();
@@ -92,11 +121,8 @@ mod test {
   #[test]
   fn all_test_cases() {
     let test_cases = get_all_test_data();
-    for test_case in test_cases {
-      let file_path = Path::new(test_case.file_path);
-      let file_name = file_path.file_name().unwrap().to_str().unwrap();
-      let result = get_date_for_file(file_path, file_name, NaiveDateTime::MAX);
-      assert_eq!(result, test_case.result);
-    }
+    test_test_cases(&test_cases, |file_path, file_name| {
+      get_date_for_file(file_path, file_name, NaiveDateTime::MAX)
+    });
   }
 }
