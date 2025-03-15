@@ -10,6 +10,7 @@ use std::{path::Path, str::FromStr, sync::LazyLock};
 /// * 2019-07-14 20_25_57
 ///
 /// Example file paths:
+///   * /storage/emulated/0/DCIM/Camera/2020 10 10 21:10:56.png
 ///   * /storage/emulated/0/DCIM/Camera/2020 10 10 211056.png
 ///   * /storage/emulated/0/DCIM/Camera/2020_10_10 211056.png
 ///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056.png
@@ -40,7 +41,7 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
   let file_name_no_ext = file_path.file_stem()?.to_str()?;
 
   static RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d{4})([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s\[+.])?").unwrap()
+    Regex::new(r"^(\d{4})([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s:])?(\d{2})?([-_\s:])?(\d{2})?([-_\s\[+.])?").unwrap()
   });
   let captures = RE.captures(file_name_no_ext)?;
 
@@ -107,6 +108,13 @@ pub mod test {
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2563a.jpg",
         result: None,
+      },
+      TestCase {
+        file_path: "/storage/emulated/0/DCIM/Camera/2020 10 10 21:10:56.png",
+        result: Some((
+          NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
+          DateConfidence::Second,
+        )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020 10 10 211056.png",
