@@ -19,6 +19,12 @@ pub use android_style_image_paths::*;
 mod whatsapp_style_image_paths;
 pub use whatsapp_style_image_paths::*;
 
+mod uuid_timestamp_prefixed_image_paths;
+pub use uuid_timestamp_prefixed_image_paths::*;
+
+mod screenshot_prefixed_style_image_paths;
+pub use screenshot_prefixed_style_image_paths::*;
+
 use chrono::NaiveDateTime;
 use std::path::Path;
 
@@ -47,6 +53,8 @@ pub fn get_date_for_file(
   let handler_functions = vec![
     get_date_from_android_filepath_nom,
     get_date_from_whatsapp_filepath_regex,
+    get_date_from_uuid_prefixed_filepath_regex,
+    get_date_from_screenshot_prefixed_filepath_regex,
   ];
 
   for handler in handler_functions {
@@ -65,10 +73,13 @@ pub fn get_date_for_file(
 
 #[cfg(test)]
 mod test {
-  use crate::date_extractors::whatsapp_style_image_paths::test::TESTS_WHATSAPP_FILEPATH;
+  use crate::date_extractors::screenshot_prefixed_style_image_paths::test::TESTS_SCREENSHOT_PREFIXED_FILEPATH;
 
-  use super::{android_style_image_paths::test::TESTS_ANDROID_FILEPATH, *};
-  use rand::seq::SliceRandom;
+  use super::{
+    android_style_image_paths::test::TESTS_ANDROID_FILEPATH,
+    uuid_timestamp_prefixed_image_paths::test::TESTS_UUID_TIMESTAMP_PREFIXED_FILEPATH,
+    whatsapp_style_image_paths::test::TESTS_WHATSAPP_FILEPATH, *,
+  };
   use std::sync::LazyLock;
 
   #[derive(Debug, Clone, Copy)]
@@ -103,19 +114,17 @@ mod test {
     assert!(DateConfidence::Minute < DateConfidence::Second);
   }
 
-  fn get_all_test_data() -> Vec<TestCase> {
+  fn get_all_test_data() -> &'static [TestCase] {
     static ALL_TEST_CASES: LazyLock<Vec<TestCase>> = LazyLock::new(|| {
       [
         TESTS_ANDROID_FILEPATH.as_slice(),
         TESTS_WHATSAPP_FILEPATH.as_slice(),
+        TESTS_UUID_TIMESTAMP_PREFIXED_FILEPATH.as_slice(),
+        TESTS_SCREENSHOT_PREFIXED_FILEPATH.as_slice(),
       ]
       .concat()
     });
-    // shuffle the test cases
-    let mut rng = rand::rng();
-    let mut test_cases = ALL_TEST_CASES.clone();
-    test_cases.shuffle(&mut rng);
-    test_cases
+    ALL_TEST_CASES.as_slice()
   }
 
   #[test]

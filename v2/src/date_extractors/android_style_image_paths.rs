@@ -2,8 +2,11 @@ use super::{ChumError, DateConfidence};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use nom::IResult;
 use regex::Regex;
-use std::{path::Path, str::FromStr};
+use std::{path::Path, str::FromStr, sync::LazyLock};
 
+/// Extracts the date from Android-style image file paths.
+/// Example file paths:
+///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
 pub fn get_date_from_android_filepath_nom(
   _file_path: &Path,
   file_name: &str,
@@ -59,12 +62,13 @@ fn parse_num<const N: usize>(num: &str) -> IResult<&str, u32> {
 
 /// Extracts the date from Android-style image file paths.
 /// Example file paths:
-///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841POSTFIX.jpg
+///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
 pub fn get_date_from_android_filepath_regex(
   _file_path: &Path,
   file_name: &str,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
-  let re = Regex::new(r"IMG_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})").unwrap();
+  let re =
+    LazyLock::new(|| Regex::new(r"IMG_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})").unwrap());
   let captures = re.captures(file_name)?;
 
   let year: u32 = captures.get(1)?.as_str().parse().ok()?;
@@ -94,7 +98,7 @@ pub fn int_n<C: chumsky::text::Character, E: chumsky::Error<C>>(
     .collect()
 }
 
-/// /storage/emulated/0/DCIM/Camera/IMG_20190818_130841POSTFIX.jpg
+/// /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
 pub fn get_date_from_android_filepath_chumsky(
   _file_path: &Path,
   file_name: &str,
@@ -139,8 +143,8 @@ pub mod test {
   use crate::date_extractors::test::{TestCase, test_test_cases};
   use std::sync::LazyLock;
 
-  pub static TESTS_ANDROID_FILEPATH: LazyLock<[TestCase; 3]> = LazyLock::new(|| {
-    [
+  pub static TESTS_ANDROID_FILEPATH: LazyLock<Vec<TestCase>> = LazyLock::new(|| {
+    vec![
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841.jpg",
         result: Some((

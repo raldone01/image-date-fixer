@@ -71,7 +71,7 @@ def get_date_from_normal_date_prefixed_filepath(file_path: str) -> Optional[date
     """
     filename = os.path.basename(file_path)
     match = re.match(
-        r'^(\d{4})(?:-?(\d{2}))?(?:-?(\d{2}))?(?:-(\d{2})(\d{2})(\d{2}))?[\s\-_a-zA-z]', filename)
+        r'^(\d{4})(?:-?(\d{2}))?(?:-?(\d{2}))?(?:-(\d{2})(\d{2})(\d{2}))?[\s\-_\.\[~+]', filename)
     if match:
         year_m, month_m, day_m, hour_m, minute_m, second_m = match.groups()
 

@@ -141,7 +141,7 @@ impl ProcessState {
     Self {
       excluded_files,
       exit_flag: AtomicBool::new(true),
-      start_time: Local::now().naive_local(),
+      start_time: Local::now().naive_utc(),
       dry_run,
       modified_times_future_threshold,
       exif_dates_future_threshold,
@@ -176,7 +176,7 @@ impl ProcessState {
     println!("  EXIF dates updated: {exif_updated}");
     println!("  EXIF dates overwritten: {exif_overwritten}");
     println!("  Modified times updated: {modified_time_updated}");
-    let std_duration = (Local::now().naive_local() - self.start_time).to_std();
+    let std_duration = (Local::now().naive_utc() - self.start_time).to_std();
     if let Ok(std_duration) = std_duration {
       println!("  Time taken: {}", pretty_duration(std_duration));
     }
@@ -312,7 +312,7 @@ fn process_file(file: &Path, process_state: &ProcessState) {
     return;
   }
 
-  let current_time = Local::now().naive_local();
+  let current_time = Local::now().naive_utc();
 
   // guess the date from the file path
   let file_name = file.file_name().unwrap().to_str().unwrap();
@@ -496,7 +496,7 @@ fn main() {
   let modified_times_future_threshold = fix_future_modified_times_day_offset
     .and_then(|invalid_modified_times_days| {
       Local::now()
-        .naive_local()
+        .naive_utc()
         .checked_add_days(chrono::Days::new(invalid_modified_times_days))
     })
     .unwrap_or(NaiveDateTime::MAX);
@@ -505,7 +505,7 @@ fn main() {
   let exif_dates_future_threshold = fix_future_exif_dates_day_offset
     .and_then(|invalid_exif_dates_days| {
       Local::now()
-        .naive_local()
+        .naive_utc()
         .checked_add_days(chrono::Days::new(invalid_exif_dates_days))
     })
     .unwrap_or(NaiveDateTime::MAX);
