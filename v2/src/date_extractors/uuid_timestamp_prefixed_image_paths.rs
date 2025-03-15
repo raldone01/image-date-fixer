@@ -11,10 +11,10 @@ pub fn get_date_from_uuid_prefixed_filepath_regex(
   _file_path: &Path,
   file_name: &str,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
-  let re = LazyLock::new(|| {
+  static RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})").unwrap()
   });
-  let captures = re.captures(file_name)?;
+  let captures = RE.captures(file_name)?;
 
   let timestamp = captures.get(1)?.as_str().parse::<i64>().ok()?;
   let datetime = DateTime::from_timestamp(timestamp / 1000, 0)?;

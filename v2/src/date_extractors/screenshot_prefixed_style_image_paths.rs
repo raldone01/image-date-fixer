@@ -18,8 +18,8 @@ pub fn get_date_from_screenshot_prefixed_filepath_regex(
   file_path: &Path,
   file_name: &str,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
-  let re = LazyLock::new(|| Regex::new(r"(?i)^(screenshot[-_\s])").unwrap());
-  let captures = re.captures(file_name)?;
+  static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(screenshot[-_\s])").unwrap());
+  let captures = RE.captures(file_name)?;
 
   let prefix = captures.get(1)?.as_str();
   let unprefixed_file_name = file_name.strip_prefix(prefix).unwrap();

@@ -39,10 +39,10 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
 ) -> Option<(NaiveDateTime, DateConfidence)> {
   let file_name_no_ext = file_path.file_stem()?.to_str()?;
 
-  let re = LazyLock::new(|| {
+  static RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d{4})([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s\[+.])?").unwrap()
   });
-  let captures = re.captures(file_name_no_ext)?;
+  let captures = RE.captures(file_name_no_ext)?;
 
   let year = captures.get(1)?.as_str().parse::<i32>().ok()?;
   let mut confidence = DateConfidence::Year;

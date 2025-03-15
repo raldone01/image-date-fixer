@@ -67,9 +67,9 @@ pub fn get_date_from_android_filepath_regex(
   _file_path: &Path,
   file_name: &str,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
-  let re =
+  static RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"IMG_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})").unwrap());
-  let captures = re.captures(file_name)?;
+  let captures = RE.captures(file_name)?;
 
   let year: u32 = captures.get(1)?.as_str().parse().ok()?;
   let month: u32 = captures.get(2)?.as_str().parse().ok()?;
