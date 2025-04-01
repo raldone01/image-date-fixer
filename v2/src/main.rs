@@ -199,16 +199,16 @@ fn process_dir(dir: &Path, process_state: &ProcessState) {
     .stat_folders_processed
     .fetch_add(1, Ordering::Relaxed);
 
-  info!("\"{}\": Processing directory", dir.display());
+  info!("\"{}\": Processing top level directory", dir.display());
 
   let entries = WalkDir::new(dir)
     .into_iter()
     .filter_map(Result::ok)
     .collect::<Vec<_>>();
 
-  entries.par_iter().for_each(|entry| {
+  let _ = entries.par_iter().try_for_each(|entry| {
     if !process_state.exit_flag.load(Ordering::Relaxed) {
-      return;
+      return Err(());
     }
 
     let path = entry.path();
@@ -216,14 +216,21 @@ fn process_dir(dir: &Path, process_state: &ProcessState) {
       process_state
         .stat_files_skipped
         .fetch_add(1, Ordering::Relaxed);
-      return;
+      return Ok(());
     }
 
-    if path.is_dir() {
-      process_dir(path, process_state);
-    } else {
-      process_file(path, process_state);
-    }
+    path.metadata().ok().map(|metadata| {
+      if metadata.is_dir() {
+        process_state
+          .stat_folders_processed
+          .fetch_add(1, Ordering::Relaxed);
+        info!("\"{}\": Processing directory", dir.display());
+      } else if metadata.is_file() {
+        process_file(path, process_state);
+      }
+    });
+
+    Ok(())
   });
 }
 
@@ -301,7 +308,7 @@ fn process_file(file: &Path, process_state: &ProcessState) {
     .map(str::to_ascii_uppercase);
 
   // check that the file extension is a valid image extension
-  if file_extension.is_some_and(|ext| !exif_tool_writable_file_extensions().contains(&ext)) {
+  if file_extension.is_none_or(|ext| !exif_tool_writable_file_extensions().contains(&ext)) {
     info!(
       "\"{}\": File is not an image file. Skipping.",
       file.display()
@@ -408,8 +415,8 @@ fn new_argparser() -> clap::Command {
   command!()
   .about("Extracts possible timestamp information from filenames and sets EXIF and modified times accordingly.")
   .arg(
-    Arg::new("file")
-    .long("file")
+    Arg::new("files")
+    .long("files")
     .help("Files or directories to process")
     .num_args(1..)
     .value_name("FILES")
@@ -465,7 +472,7 @@ fn main() {
   let matches = new_argparser().get_matches();
 
   let files = matches
-    .get_occurrences::<PathBuf>("file")
+    .get_occurrences::<PathBuf>("files")
     .unwrap_or_default();
   let excluded_files = matches
     .get_occurrences::<PathBuf>("exclude-files")
@@ -478,13 +485,14 @@ fn main() {
   let log_level = matches
     .get_one::<String>("log-level")
     .and_then(|level| Level::from_str(level).ok());
-  let mut logging_builder = tracing_subscriber::fmt::fmt();
+  let logging_builder = tracing_subscriber::fmt::fmt().with_writer(std::io::stdout);
   if let Some(level) = log_level {
-    logging_builder = logging_builder.with_max_level(level);
+    logging_builder.with_max_level(level).init();
+  } else {
+    logging_builder
+      .with_env_filter(EnvFilter::from_default_env())
+      .init();
   }
-  logging_builder
-    .with_env_filter(EnvFilter::from_default_env())
-    .init();
 
   if !has_exiftool() {
     error!("exiftool is not installed. Make sure it is installed and in your PATH.");

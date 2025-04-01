@@ -1,5 +1,12 @@
 use super::{ChumError, DateConfidence};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chumsky::{
+  extra::ParserExtra,
+  input::{SliceInput, StrInput},
+  label::LabelError,
+  text::{Char, TextExpected},
+  util::MaybeRef,
+};
 use nom::IResult;
 use regex::Regex;
 use std::{path::Path, str::FromStr, sync::LazyLock};
@@ -86,16 +93,34 @@ pub fn get_date_from_android_filepath_regex(
 }
 
 #[must_use]
-pub fn int_n<C: chumsky::text::Character, E: chumsky::Error<C>>(
+pub fn int_n<'src, I, E>(
   radix: u32,
   length: usize,
-) -> impl chumsky::Parser<C, C::Collection, Error = E> + Copy {
+) -> impl chumsky::Parser<'src, I, <I as SliceInput<'src>>::Slice, E> + Copy
+where
+  I: StrInput<'src>,
+  I::Token: Char + 'src,
+  E: ParserExtra<'src, I>,
+  E::Error:
+    LabelError<'src, I, TextExpected<'src, I>> + LabelError<'src, I, MaybeRef<'src, I::Token>>,
+{
   use chumsky::prelude::*;
 
-  filter(move |c: &C| c.is_digit(radix))
+  any()
+    .try_map(move |c: I::Token, span| {
+      if c.is_digit(radix) {
+        Ok(())
+      } else {
+        Err(LabelError::expected_found(
+          [TextExpected::Digit(0..radix)],
+          Some(MaybeRef::Val(c)),
+          span,
+        ))
+      }
+    })
     .repeated()
     .exactly(length)
-    .collect()
+    .to_slice()
 }
 
 /// /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
@@ -105,31 +130,28 @@ pub fn get_date_from_android_filepath_chumsky(
 ) -> Option<(NaiveDateTime, DateConfidence)> {
   use chumsky::prelude::*;
 
-  let map_int = |s: String| s.parse::<u32>().unwrap();
+  let prefix_parser = just::<_, _, extra::Err<ChumError>>("IMG_").ignored();
 
-  let prefix_parser = just::<_, _, ChumError>("IMG_").ignored();
+  let map_int = |s: &str| s.parse::<u32>().unwrap();
+
   let date_parser = int_n(10, 4)
     .map(map_int)
-    .chain(int_n(10, 2).map(map_int))
-    .chain(int_n(10, 2).map(map_int));
+    .then(int_n(10, 2).map(map_int))
+    .then(int_n(10, 2).map(map_int));
+
   let time_parser = int_n(10, 2)
     .map(map_int)
-    .chain(int_n(10, 2).map(map_int))
-    .chain(int_n(10, 2).map(map_int));
-  let date_part_parser = date_parser.then_ignore(just("_")).chain(time_parser);
-  let android_parser = prefix_parser.then(date_part_parser);
+    .then(int_n(10, 2).map(map_int))
+    .then(int_n(10, 2).map(map_int));
+  let date_part_parser = date_parser.then_ignore(just("_")).then(time_parser);
+  let android_parser = prefix_parser.then(date_part_parser).lazy();
   let result = android_parser.parse(file_name);
 
-  //result.as_ref().inspect_err(|e| print_errors(e, file_name));
-  //dbg!(result.as_ref());
+  //crate::date_extractors::print_chumsky_errors(result.errors(), file_name);
+  //dbg!(result);
 
-  let ((), number_vec) = result.ok()?;
-  let year: u32 = number_vec[0];
-  let month = number_vec[1];
-  let day = number_vec[2];
-  let hour = number_vec[3];
-  let minute = number_vec[4];
-  let second = number_vec[5];
+  let ((), (((year, month), day), ((hour, minute), second))) = result.into_result().ok()?;
+
   let datetime = NaiveDateTime::new(
     NaiveDate::from_ymd_opt(year.try_into().ok()?, month, day)?,
     NaiveTime::from_hms_opt(hour, minute, second)?,

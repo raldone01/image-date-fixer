@@ -1,5 +1,5 @@
 //type ChumError = chumsky::error::Simple<char>;
-type ChumError = chumsky::error::Cheap<char>;
+type ChumError = chumsky::error::Cheap;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
 pub enum DateConfidence {
@@ -32,19 +32,16 @@ use chrono::NaiveDateTime;
 use std::path::Path;
 
 /// Prints the reports from the vector of errors
-pub fn print_chumsky_errors(errors: &[ChumError], source: &str) {
+pub fn print_chumsky_errors<'a>(errors: impl Iterator<Item = &'a ChumError>, source: &str) {
   use ariadne::{Label, Report, ReportKind, Source};
 
-  errors
-    .iter()
-    .map(|e| {
-      Report::build(ReportKind::Error, e.span())
-        .with_label(Label::new(e.span()).with_message("OOF"))
-        .finish()
-        .print(Source::from(source))
-        .unwrap();
-    })
-    .for_each(drop);
+  errors.for_each(|e| {
+    Report::build(ReportKind::Error, e.span().into_range())
+      .with_label(Label::new(e.span().into_range()).with_message(e.to_string()))
+      .finish()
+      .print(Source::from(source))
+      .unwrap();
+  });
 }
 
 pub fn get_date_for_file(
