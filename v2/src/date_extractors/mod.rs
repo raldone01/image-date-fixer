@@ -86,7 +86,7 @@ mod test {
   #[derive(Debug, Clone, Copy)]
   pub struct TestCase {
     pub file_path: &'static str,
-    pub result: Option<(NaiveDateTime, DateConfidence)>,
+    pub expected_result: Option<(NaiveDateTime, DateConfidence)>,
   }
 
   pub fn test_test_cases(
@@ -98,8 +98,8 @@ mod test {
       let file_name = file_path.file_name().unwrap().to_str().unwrap();
       let result = parser(file_path, file_name);
       assert_eq!(
-        result, test_case.result,
-        "Failed for {}",
+        test_case.expected_result, result,
+        "`expected == got`: Failed for {}",
         test_case.file_path
       );
     }

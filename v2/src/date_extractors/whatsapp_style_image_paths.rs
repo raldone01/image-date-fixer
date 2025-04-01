@@ -35,7 +35,7 @@ pub mod test {
     vec![
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/IMG-20250127-WA0006.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDate::parse_from_str("20250127", "%Y%m%d")
             .unwrap()
             .into(),
@@ -44,7 +44,7 @@ pub mod test {
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/IMG-20250127-WA0006POSTFIX.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDate::parse_from_str("20250127", "%Y%m%d")
             .unwrap()
             .into(),

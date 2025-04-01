@@ -169,21 +169,21 @@ pub mod test {
     vec![
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("20190818130841", "%Y%m%d%H%M%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841POSTFIX.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("20190818130841", "%Y%m%d%H%M%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/home/user/Pictures/IMG_20191318_130841POSTFIX.jpg",
-        result: None,
+        expected_result: None,
       },
     ]
   });

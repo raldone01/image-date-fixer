@@ -1,91 +1,202 @@
 use super::{ChumError, DateConfidence, get_date_for_file};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use nom::IResult;
 use regex::Regex;
 use std::{path::Path, str::FromStr, sync::LazyLock};
 
-/// Extracts the date and optional time from filenames prefixed with a YYYY, YYYYMM, YYYYMMDD, YYYY-MM, or YYYY-MM-DD format.
-/// Optionally, a time in one of the following formats may follow:
-/// * in HHMMSS format (e.g., `-211056`)
-/// * 2019-07-14 20_25_57
+const GERMAN_MONTHS_NO_ACCENTS: [&str; 12] = [
+  "jaenner",
+  "februar",
+  "maerz",
+  "april",
+  "mai",
+  "juni",
+  "juli",
+  "august",
+  "september",
+  "oktober",
+  "november",
+  "dezember",
+];
+
+const GERMAN_MONTHS_WITH_ACCENTS: [&str; 12] = [
+  "jänner",
+  "februar",
+  "märz",
+  "april",
+  "mai",
+  "juni",
+  "juli",
+  "august",
+  "september",
+  "oktober",
+  "november",
+  "dezember",
+];
+
+const GERMAN_PREFIXES_NO_ACCENTS: [&str; 12] = [
+  "jan", "feb", "mar", "apr", "mai", "jun", "jul", "aug", "sep", "okt", "nov", "dez",
+];
+
+const GERMAN_PREFIXES_WITH_ACCENTS: [&str; 12] = [
+  "jan", "feb", "mär", "apr", "mai", "jun", "jul", "aug", "sep", "okt", "nov", "dez",
+];
+
+const ENGLISH_MONTHS: [&str; 12] = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
+
+const ENGLISH_PREFIXES: [&str; 12] = [
+  "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+
+/// Helper function that converts a string representing a month (either numeric or alphabetic)
+/// into a numeric month (1-12). Alphabetic comparisons are done case-insensitively
+/// and allow the first 3 letters as an abbreviation.
+fn parse_month_from_str(month_str: &str) -> Option<u32> {
+  // If the string is numeric, try parsing it directly.
+  let numeric_month = u32::from_str_radix(month_str, 10).ok();
+  if numeric_month.is_some() {
+    return numeric_month;
+  }
+
+  let month_str = month_str.to_lowercase();
+
+  // Check against English month names.
+  for (i, &real_month_str) in [
+    GERMAN_MONTHS_WITH_ACCENTS,
+    GERMAN_MONTHS_NO_ACCENTS,
+    GERMAN_PREFIXES_WITH_ACCENTS,
+    GERMAN_PREFIXES_NO_ACCENTS,
+    ENGLISH_MONTHS,
+    ENGLISH_PREFIXES,
+  ]
+  .iter()
+  .map(|list| list.iter().enumerate())
+  .flatten()
+  {
+    let is_month_match = month_str == real_month_str;
+    if is_month_match {
+      return Some((i + 1) as u32);
+    }
+  }
+
+  None
+}
+
+/// Extracts the date and optional time from filenames prefixed with a date. The date can be in
+/// numeric format (YYYY, YYYYMM, YYYYMMDD, etc.) or the month may be a string (e.g., "2020-Mar-10").
+/// The regex is built to allow alphabetic months (case insensitive, and the first 3 letters are enough).
 ///
 /// Example file paths:
-///   * /storage/emulated/0/DCIM/Camera/2024-03-23_21.45.17_mull.jpg
-///   * /storage/emulated/0/DCIM/Camera/2020 10 10 21:10:56.png
-///   * /storage/emulated/0/DCIM/Camera/2020 10 10 211056.png
-///   * /storage/emulated/0/DCIM/Camera/2020_10_10 211056.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056 a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056-a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056+a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056[a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056~a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 211056_a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10-211056 a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10_211056 a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10_20_25_57 a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10 20_25_57 a.png
-///   * /storage/emulated/0/DCIM/Camera/20201010_20_25_57 a.png
-///   * /storage/emulated/0/DCIM/Camera/20201010_202557 a.png
-///   * /storage/emulated/0/DCIM/Camera/20201010_20_25_57-a.png
-///   * /storage/emulated/0/DCIM/Camera/20201010-20-25-57 a.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10-10.png
-///   * /storage/emulated/0/DCIM/Camera/2020-10.png
-///   * /storage/emulated/0/DCIM/Camera/2020 a.png (this requires a postfix otherwise it is not specific enough)
+///   * /.../2024-03-23_21.45.17_mull.jpg
+///   * /.../2020-Mar-10 21:10:56.png
+///   * /.../2020-oct-10.png
 ///
 /// Unsupported:
-///   * /storage/emulated/0/DCIM/Camera/2563.jpg
-///   * /storage/emulated/0/DCIM/Camera/2543a.jpg
+///   * /.../2563.jpg
+///
+/// Note: When only a year is provided, a trailing separator (or extra characters) is required to
+/// indicate that the date is meant to be specific.
 pub fn get_date_from_custom_date_prefixed_filepath_regex(
   file_path: &Path,
   _file_name: &str,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
   static RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d{4})([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s:.])?(\d{2})?([-_\s:.])?(\d{2})?([-_\s\[+.])?").unwrap()
+    Regex::new(
+      r"^(?P<year>\d{4})?(?P<w1>[-_\s])?(?P<month>(?:\d{2}|[A-Za-z]{3,9}))?(?P<w2>[-_\s])?(?P<day>\d{2})?(?P<w3>[-_\s])?(?P<hour>\d{2})?(?P<w4>[-_\s:.])?(?P<minute>\d{2})?(?P<w5>[-_\s:.])?(?P<second>\d{2})?"
+    ).unwrap()
   });
 
   let file_name_no_ext = file_path.file_stem()?.to_str()?;
   let captures = RE.captures(file_name_no_ext)?;
 
-  let year = captures.get(1)?.as_str().parse::<i32>().ok()?;
+  // Parse year (required).
+  let year_str = captures.name("year")?.as_str();
+  let year = year_str.parse::<i32>().ok()?;
   let mut confidence = DateConfidence::Year;
-  let month = captures.get(3).map_or(1, |m| {
+
+  // Parse month: if provided, it may be numeric or an alphabetic month.
+  let maybe_month = captures
+    .name("month")
+    .and_then(|month_match| parse_month_from_str(month_match.as_str()));
+  let month = if let Some(month) = maybe_month {
     confidence = DateConfidence::Month;
-    m.as_str().parse::<u32>().ok().unwrap_or(1)
-  });
-  let day = captures.get(5).map_or(1, |d| {
+    month
+  } else {
+    1
+  };
+
+  // Parse day if available.
+  let maybe_day = maybe_month
+    .and(captures.name("day"))
+    .and_then(|day_match| day_match.as_str().parse::<u32>().ok());
+  let day = if let Some(day) = maybe_day {
     confidence = DateConfidence::Day;
-    d.as_str().parse::<u32>().ok().unwrap_or(1)
-  });
-  let hour = captures.get(7).map_or(0, |h| {
+    day
+  } else {
+    1
+  };
+
+  // Parse hour if available.
+  let maybe_hour = maybe_day
+    .and(captures.name("hour"))
+    .and_then(|hour_match| hour_match.as_str().parse::<u32>().ok());
+  let hour = if let Some(hour) = maybe_hour {
     confidence = DateConfidence::Hour;
-    h.as_str().parse::<u32>().ok().unwrap_or(0)
-  });
-  let minute = captures.get(9).map_or(0, |m| {
+    hour
+  } else {
+    0
+  };
+
+  // Parse minute if available.
+  let maybe_minute = maybe_hour
+    .and(captures.name("minute"))
+    .and_then(|minute_match| minute_match.as_str().parse::<u32>().ok());
+  let minute = if let Some(minute) = maybe_minute {
     confidence = DateConfidence::Minute;
-    m.as_str().parse::<u32>().ok().unwrap_or(0)
-  });
-  let second = captures.get(11).map_or(0, |s| {
+    minute
+  } else {
+    0
+  };
+
+  // Parse second if available.
+  let maybe_second = maybe_minute
+    .and(captures.name("second"))
+    .and_then(|second_match| second_match.as_str().parse::<u32>().ok());
+  let second = if let Some(second) = maybe_second {
     confidence = DateConfidence::Second;
-    s.as_str().parse::<u32>().ok().unwrap_or(0)
-  });
+    second
+  } else {
+    0
+  };
 
-  let separator_capture_groups = [2_usize, 4, 6, 8, 10, 12];
-  let mut consecutive_capture_groups = 0;
-  for matches in captures.iter().skip(1) {
-    if matches.is_some() {
-      consecutive_capture_groups += 1;
-    } else {
-      break;
-    }
-  }
-  let ends_with_separator_capture_group: bool =
-    separator_capture_groups.contains(&consecutive_capture_groups);
+  let captured_any_whitespace = captures
+    .name("w1")
+    .or(captures.name("w2"))
+    .or(captures.name("w3"))
+    .or(captures.name("w4"))
+    .or(captures.name("w5"))
+    .is_some();
 
-  if confidence == DateConfidence::Year && !ends_with_separator_capture_group {
+  // If we only captured a year and the file name consists solely of the year (i.e. "2020"),
+  // then the date is not specific enough.
+  if confidence == DateConfidence::Year && !captured_any_whitespace {
     return None;
   }
 
+  // Build the NaiveDateTime using the parsed values.
   Some((
     NaiveDateTime::new(
       NaiveDate::from_ymd_opt(year, month, day)?,
@@ -105,169 +216,200 @@ pub mod test {
     vec![
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2024-03-23_21.45.17_mull.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2024-03-23 21:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
+      // Numeric-only examples
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2563.jpg",
-        result: None,
+        expected_result: None,
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2563a.jpg",
-        result: None,
+        expected_result: None,
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020 10 10 21:10:56.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020 10 10 211056.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020_10_10 211056.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056-a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056+a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056[a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056~a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 211056_a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10-211056 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10_211056 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10_20_25_57 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 20:25:57", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10 20_25_57 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 20:25:57", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/20201010_20_25_57 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 20:25:57", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/20201010_202557 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 20:25:57", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/20201010_20_25_57-a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 20:25:57", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/20201010-20-25-57 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 20:25:57", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10-10.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-10 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Day,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020-10.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-10-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Month,
         )),
       },
+      // New examples using alphabetic month names.
+      TestCase {
+        file_path: "/storage/emulated/0/DCIM/Camera/2020-Mar-10 21:10:56.png",
+        expected_result: Some((
+          NaiveDateTime::parse_from_str("2020-03-10 21:10:56", "%Y-%m-%d %H:%M:%S").unwrap(),
+          DateConfidence::Second,
+        )),
+      },
+      TestCase {
+        file_path: "/storage/emulated/0/DCIM/Camera/2020-oct-10.png",
+        expected_result: Some((
+          NaiveDateTime::parse_from_str("2020-10-10 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
+          DateConfidence::Day,
+        )),
+      },
+      TestCase {
+        file_path: "/storage/emulated/0/DCIM/Camera/2020-OCT-10.png",
+        expected_result: Some((
+          NaiveDateTime::parse_from_str("2020-10-10 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
+          DateConfidence::Day,
+        )),
+      },
+      TestCase {
+        file_path: "/storage/emulated/0/DCIM/Camera/2012_Tag06_Bayreuth_Markgräfliches Opernhaus (7).jpg",
+        expected_result: Some((
+          NaiveDateTime::parse_from_str("2012-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
+          DateConfidence::Year,
+        )),
+      },
+      // The test for a year-only filename
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/2020 a.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Year,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/20241108_094517_Mull.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),

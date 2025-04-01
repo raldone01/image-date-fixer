@@ -241,7 +241,7 @@ fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
       process_state
         .stat_folders_processed
         .fetch_add(1, Ordering::Relaxed);
-      trace!("\"{}\": Processing directory", entry.path().display());
+      trace!("\"{}\": Processing directory", path.display());
     } else if entry.file_type().is_file() {
       process_file(&path, process_state);
     } else {
@@ -394,7 +394,7 @@ fn process_file(file: &Path, process_state: &ProcessState) {
     }
   }
   if let Some((date, confidence)) = guessed_date {
-    if confidence > original_exif_confidence {
+    if confidence > original_exif_confidence && Some(date) != original_exif_date {
       if let Some(original_exif_date) = original_exif_date {
         info!(
           "\"{}\": Overwriting EXIF date {} (confidence: {:?}) with guessed date {} (confidence: {:?})",

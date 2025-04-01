@@ -43,46 +43,46 @@ pub mod test {
     vec![
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot_312.png",
-        result: None,
+        expected_result: None,
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot 2020-09-15 191156.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2020-09-15 19:11:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot_20240720_020223_Jerboa.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2024-07-20 02:02:23", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot 2023-08-22 121704_windows_big_ad.png",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2023-08-22 12:17:04", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot_20241108_094517_Mull.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/screenshot_20241108_094517_Mull.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/screenshot-20241108_094517_Mull.jpg",
-        result: Some((
+        expected_result: Some((
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),

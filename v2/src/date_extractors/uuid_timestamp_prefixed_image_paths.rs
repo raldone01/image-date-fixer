@@ -32,14 +32,14 @@ pub mod test {
       vec![
         TestCase {
           file_path: "/home/user/Pictures/1606470461418-49b19a16-01a9-4a11-9789-e3005d827362.jpg",
-          result: Some((
+          expected_result: Some((
             NaiveDateTime::parse_from_str("20201127094741", "%Y%m%d%H%M%S").unwrap(),
             DateConfidence::Second,
           )),
         },
         TestCase {
           file_path: "/home/user/Pictures/1606470461418-49b19a16-01a9-4a11-9789-e3005d827362postfix.jpg",
-          result: Some((
+          expected_result: Some((
             NaiveDateTime::parse_from_str("20201127094741", "%Y%m%d%H%M%S").unwrap(),
             DateConfidence::Second,
           )),
