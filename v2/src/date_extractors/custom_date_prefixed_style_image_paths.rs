@@ -66,7 +66,7 @@ const ENGLISH_PREFIXES: [&str; 12] = [
 /// and allow the first 3 letters as an abbreviation.
 fn parse_month_from_str(month_str: &str) -> Option<u32> {
   // If the string is numeric, try parsing it directly.
-  let numeric_month = u32::from_str_radix(month_str, 10).ok();
+  let numeric_month = month_str.parse::<u32>().ok();
   if numeric_month.is_some() {
     return numeric_month;
   }
@@ -83,12 +83,11 @@ fn parse_month_from_str(month_str: &str) -> Option<u32> {
     ENGLISH_PREFIXES,
   ]
   .iter()
-  .map(|list| list.iter().enumerate())
-  .flatten()
+  .flat_map(|list| list.iter().enumerate())
   {
     let is_month_match = month_str == real_month_str;
     if is_month_match {
-      return Some((i + 1) as u32);
+      return u32::try_from(i + 1).ok();
     }
   }
 
@@ -184,10 +183,10 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
 
   let captured_any_whitespace = captures
     .name("w1")
-    .or(captures.name("w2"))
-    .or(captures.name("w3"))
-    .or(captures.name("w4"))
-    .or(captures.name("w5"))
+    .or_else(|| captures.name("w2"))
+    .or_else(|| captures.name("w3"))
+    .or_else(|| captures.name("w4"))
+    .or_else(|| captures.name("w5"))
     .is_some();
 
   // If we only captured a year and the file name consists solely of the year (i.e. "2020"),

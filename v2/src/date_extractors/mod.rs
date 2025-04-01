@@ -132,7 +132,7 @@ mod test {
   #[test]
   fn all_test_cases() {
     let test_cases = get_all_test_data();
-    test_test_cases(&test_cases, |file_path, file_name| {
+    test_test_cases(test_cases, |file_path, file_name| {
       get_date_for_file(file_path, file_name, NaiveDateTime::MAX)
     });
   }

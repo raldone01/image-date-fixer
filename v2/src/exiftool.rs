@@ -33,7 +33,7 @@ pub fn get_exif_date(file: &Path) -> Option<NaiveDateTime> {
 
   let date_str = String::from_utf8(output.stdout).unwrap();
   let date_str = date_str.trim();
-  NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S").ok()
+  NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S").ok()
 }
 
 pub fn set_exif_date(file: &Path, date: &NaiveDateTime, dry_run: bool) -> bool {
@@ -49,8 +49,7 @@ pub fn set_exif_date(file: &Path, date: &NaiveDateTime, dry_run: bool) -> bool {
   let date_str = date.format("%Y-%m-%d %H:%M:%S").to_string();
   let output = process::Command::new("exiftool")
     .arg("-overwrite_original")
-    .arg("-DateTimeOriginal=")
-    .arg(&date_str)
+    .arg(format!("-DateTimeOriginal={date_str}"))
     .arg(file)
     .output()
     .expect("Failed to run exiftool");
@@ -78,7 +77,7 @@ pub fn exif_tool_writable_file_extensions() -> &'static BTreeSet<String> {
 
     if !output.status.success() {
       error!(
-        "Failed to get list of writable file extensions. exiftool output: {}",
+        "Failed to get list of writeable file extensions. exiftool output: {}",
         String::from_utf8(output.stderr).unwrap()
       );
       process::exit(1);
@@ -94,6 +93,11 @@ pub fn exif_tool_writable_file_extensions() -> &'static BTreeSet<String> {
         extensions.insert(extension.to_string());
       }
     }
+
+    // While exiftool supports pdf, it doesn't make sense to set the original date
+    // on a pdf file. So we remove it from the list.
+    extensions.remove("PDF");
+
     extensions
   });
   &SUPPORTED_EXTENSIONS

@@ -24,7 +24,10 @@ use rayon::prelude::*;
 use regex::Regex;
 use std::{
   collections::BTreeSet,
-  fmt::Write,
+  fmt::Write as _,
+  io::{
+    Write as _, {self},
+  },
   path::{Path, PathBuf},
   process::{self, exit},
   str::FromStr,
@@ -115,7 +118,8 @@ fn pretty_duration(duration: Duration) -> String {
 }
 
 struct ProcessState {
-  excluded_files: BTreeSet<PathBuf>,
+  excluded_files: Arc<BTreeSet<PathBuf>>,
+  skip_hidden_files: bool,
   exit_flag: AtomicBool,
   start_time: NaiveDateTime,
   dry_run: bool,
@@ -135,12 +139,14 @@ struct ProcessState {
 impl ProcessState {
   fn new(
     excluded_files: BTreeSet<PathBuf>,
+    skip_hidden_files: bool,
     dry_run: bool,
     modified_times_future_threshold: NaiveDateTime,
     exif_dates_future_threshold: NaiveDateTime,
   ) -> Self {
     Self {
-      excluded_files,
+      excluded_files: Arc::new(excluded_files),
+      skip_hidden_files,
       exit_flag: AtomicBool::new(true),
       start_time: Local::now().naive_utc(),
       dry_run,
@@ -158,7 +164,7 @@ impl ProcessState {
     }
   }
 
-  fn pretty_print_stats(&self) {
+  fn pretty_print_stats(&self) -> Result<(), Box<io::Error>> {
     let folders_processed = self.stat_folders_processed.load(Ordering::Relaxed);
     let folders_skipped = self.stat_folders_skipped.load(Ordering::Relaxed);
     let files_processed = self.stat_files_processed.load(Ordering::Relaxed);
@@ -168,19 +174,32 @@ impl ProcessState {
     let exif_overwritten = self.stat_exif_overwritten.load(Ordering::Relaxed);
     let modified_time_updated = self.stat_modified_time_updated.load(Ordering::Relaxed);
 
-    println!("Statistics:");
-    println!("  Folders processed: {folders_processed}");
-    println!("  Folders skipped: {folders_skipped}");
-    println!("  Files processed: {files_processed}");
-    println!("  Files skipped: {files_skipped}");
-    println!("  Files with errors: {files_errors}");
-    println!("  EXIF dates updated: {exif_updated}");
-    println!("  EXIF dates overwritten: {exif_overwritten}");
-    println!("  Modified times updated: {modified_time_updated}");
+    // Acquire a lock on standard output for buffered writing
+    let mut stdout = io::stdout().lock();
+
+    writeln!(&mut stdout, "Statistics:")?;
+    writeln!(&mut stdout, "  Folders processed: {folders_processed}")?;
+    writeln!(&mut stdout, "  Folders skipped: {folders_skipped}")?;
+    writeln!(&mut stdout, "  Files processed: {files_processed}")?;
+    writeln!(&mut stdout, "  Files skipped: {files_skipped}")?;
+    writeln!(&mut stdout, "  Files with errors: {files_errors}")?;
+    writeln!(&mut stdout, "  EXIF dates updated: {exif_updated}")?;
+    writeln!(&mut stdout, "  EXIF dates overwritten: {exif_overwritten}")?;
+    writeln!(
+      &mut stdout,
+      "  Modified times updated: {modified_time_updated}"
+    )?;
+
     let std_duration = (Local::now().naive_utc() - self.start_time).to_std();
     if let Ok(std_duration) = std_duration {
-      println!("  Time taken: {}", pretty_duration(std_duration));
+      writeln!(
+        &mut stdout,
+        "  Time taken: {}",
+        pretty_duration(std_duration)
+      )?;
     }
+
+    Ok(())
   }
 }
 
@@ -205,7 +224,18 @@ fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
 
   info!("\"{}\": Processing top level directory", root_dir.display());
 
-  let entries = WalkDir::new(root_dir).skip_hidden(false).into_iter();
+  let excluded_files = process_state.excluded_files.clone();
+  let entries = WalkDir::new(root_dir)
+    .skip_hidden(process_state.skip_hidden_files)
+    .process_read_dir(move |_depth, _path, _read_dir_state, children| {
+      // Filter out excluded directories
+      for child in children.iter_mut().flatten() {
+        if excluded_files.contains(&child.path()) {
+          child.read_children_path = None;
+        }
+      }
+    })
+    .into_iter();
 
   let _ = entries.par_bridge().try_for_each(|entry_result| {
     let entry = match entry_result {
@@ -213,9 +243,10 @@ fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
       Err(e) => {
         error!(
           "\"{}\": Failed to read entry: {}",
-          e.path()
-            .map(|path_option| path_option.display().to_string())
-            .unwrap_or("Unknown path".to_string()),
+          e.path().map_or_else(
+            || "Unknown path".to_string(),
+            |path_option| path_option.display().to_string(),
+          ),
           e
         );
         process_state
@@ -487,9 +518,15 @@ fn new_argparser() -> clap::Command {
     .help("Print statistics")
     .action(ArgAction::SetTrue)
   )
+  .arg(
+    Arg::new("skip-hidden-files")
+    .long("skip-hidden-files")
+    .help("Skip hidden files")
+    .action(ArgAction::SetTrue),
+  )
 }
 
-fn main() {
+fn main() -> Result<(), Box<io::Error>> {
   let matches = new_argparser().get_matches();
 
   let files = matches
@@ -506,7 +543,7 @@ fn main() {
   let log_level = matches
     .get_one::<String>("log-level")
     .and_then(|level| Level::from_str(level).ok());
-  let logging_builder = tracing_subscriber::fmt::fmt().with_writer(std::io::stdout);
+  let logging_builder = tracing_subscriber::fmt::fmt().with_writer(io::stdout);
   if let Some(level) = log_level {
     logging_builder.with_max_level(level).init();
   } else {
@@ -548,24 +585,32 @@ fn main() {
     .get_one::<bool>("print-stats")
     .copied()
     .unwrap_or(false);
+  let skip_hidden_files = matches
+    .get_one::<bool>("skip-hidden-files")
+    .copied()
+    .unwrap_or(false);
 
   if print_supported_file_extensions {
-    println!("Supported file extensions:");
+    // Acquire a lock on standard output for buffered writing
+    let mut stdout = io::stdout().lock();
+
+    writeln!(&mut stdout, "Supported file extensions:")?;
     let items_per_line = 10;
     for (i, extension) in exif_tool_writable_file_extensions().iter().enumerate() {
       if i % items_per_line == 0 {
-        print!("  ");
+        write!(&mut stdout, "  ")?;
       }
-      print!("{extension} ");
+      write!(&mut stdout, "{extension} ")?;
       if (i + 1) % items_per_line == 0 {
-        println!();
+        writeln!(&mut stdout)?;
       }
     }
-    println!();
+    writeln!(&mut stdout, "\n")?;
   }
 
   let process_state = Arc::new(ProcessState::new(
     excluded_files,
+    skip_hidden_files,
     dry_run,
     modified_times_future_threshold,
     exif_dates_future_threshold,
@@ -590,6 +635,8 @@ fn main() {
   });
 
   if print_stats {
-    process_state.pretty_print_stats();
+    process_state.pretty_print_stats()?;
   }
+
+  Ok(())
 }
