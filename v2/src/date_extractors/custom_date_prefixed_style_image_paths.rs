@@ -32,6 +32,7 @@ use std::{path::Path, str::FromStr, sync::LazyLock};
 ///   * /storage/emulated/0/DCIM/Camera/2020-10-10.png
 ///   * /storage/emulated/0/DCIM/Camera/2020-10.png
 ///   * /storage/emulated/0/DCIM/Camera/2020 a.png (this requires a postfix otherwise it is not specific enough)
+///
 /// Unsupported:
 ///   * /storage/emulated/0/DCIM/Camera/2563.jpg
 ///   * /storage/emulated/0/DCIM/Camera/2543a.jpg
@@ -39,11 +40,11 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
   file_path: &Path,
   _file_name: &str,
 ) -> Option<(NaiveDateTime, DateConfidence)> {
-  let file_name_no_ext = file_path.file_stem()?.to_str()?;
-
   static RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d{4})([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s])?(\d{2})?([-_\s:.])?(\d{2})?([-_\s:.])?(\d{2})?([-_\s\[+.])?").unwrap()
   });
+
+  let file_name_no_ext = file_path.file_stem()?.to_str()?;
   let captures = RE.captures(file_name_no_ext)?;
 
   let year = captures.get(1)?.as_str().parse::<i32>().ok()?;

@@ -1,7 +1,4 @@
 .venv/
 __pycache__/
-
-
-# Added by cargo
-
 /target
+/tmp

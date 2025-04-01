@@ -12,6 +12,7 @@ use std::{path::Path, str::FromStr, sync::LazyLock};
 ///   * /storage/emulated/0/DCIM/Camera/Screenshot_20241108_094517_Mull.jpg
 ///   * /storage/emulated/0/DCIM/Camera/screenshot_20241108_094517_Mull.jpg
 ///   * /storage/emulated/0/DCIM/Camera/screenshot-20241108_094517_Mull.jpg
+///
 /// Unsupported:
 ///   * /storage/emulated/0/DCIM/Camera/Screenshot_312.png
 pub fn get_date_from_screenshot_prefixed_filepath_regex(

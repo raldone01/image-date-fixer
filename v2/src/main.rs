@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(missing_docs)]
+
 mod date_extractors;
 mod exiftool;
 
@@ -10,6 +11,7 @@ use chumsky::error::Cheap;
 use clap::{Arg, ArgAction, Command, command, value_parser};
 use date_extractors::get_date_for_file;
 use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
+use jwalk::WalkDir;
 use nom::{
   IResult,
   bytes::complete::{tag, take},
@@ -34,7 +36,6 @@ use std::{
 };
 use tracing::{Level, debug, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
-use walkdir::WalkDir;
 
 fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
   if process_state.dry_run {
@@ -183,12 +184,15 @@ impl ProcessState {
   }
 }
 
-fn process_dir(dir: &Path, process_state: &ProcessState) {
+fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
   if !process_state.exit_flag.load(Ordering::Relaxed) {
     return;
   }
 
-  if process_state.excluded_files.contains(&dir.to_path_buf()) {
+  if process_state
+    .excluded_files
+    .contains(&root_dir.to_path_buf())
+  {
     process_state
       .stat_folders_skipped
       .fetch_add(1, Ordering::Relaxed);
@@ -199,36 +203,53 @@ fn process_dir(dir: &Path, process_state: &ProcessState) {
     .stat_folders_processed
     .fetch_add(1, Ordering::Relaxed);
 
-  info!("\"{}\": Processing top level directory", dir.display());
+  info!("\"{}\": Processing top level directory", root_dir.display());
 
-  let entries = WalkDir::new(dir)
-    .into_iter()
-    .filter_map(Result::ok)
-    .collect::<Vec<_>>();
+  let entries = WalkDir::new(root_dir).skip_hidden(false).into_iter();
 
-  let _ = entries.par_iter().try_for_each(|entry| {
+  let _ = entries.par_bridge().try_for_each(|entry_result| {
+    let entry = match entry_result {
+      Ok(entry) => entry,
+      Err(e) => {
+        error!(
+          "\"{}\": Failed to read entry: {}",
+          e.path()
+            .map(|path_option| path_option.display().to_string())
+            .unwrap_or("Unknown path".to_string()),
+          e
+        );
+        process_state
+          .stat_files_errors
+          .fetch_add(1, Ordering::Relaxed);
+        return Ok(());
+      },
+    };
+
     if !process_state.exit_flag.load(Ordering::Relaxed) {
       return Err(());
     }
 
     let path = entry.path();
-    if process_state.excluded_files.contains(&path.to_path_buf()) {
+    if process_state.excluded_files.contains(&path) {
       process_state
         .stat_files_skipped
         .fetch_add(1, Ordering::Relaxed);
       return Ok(());
     }
 
-    path.metadata().ok().map(|metadata| {
-      if metadata.is_dir() {
-        process_state
-          .stat_folders_processed
-          .fetch_add(1, Ordering::Relaxed);
-        info!("\"{}\": Processing directory", dir.display());
-      } else if metadata.is_file() {
-        process_file(path, process_state);
-      }
-    });
+    if entry.file_type().is_dir() {
+      process_state
+        .stat_folders_processed
+        .fetch_add(1, Ordering::Relaxed);
+      trace!("\"{}\": Processing directory", entry.path().display());
+    } else if entry.file_type().is_file() {
+      process_file(&path, process_state);
+    } else {
+      process_state
+        .stat_files_skipped
+        .fetch_add(1, Ordering::Relaxed);
+      warn!("\"{}\": Skipping non-file entry", path.display());
+    }
 
     Ok(())
   });
@@ -265,7 +286,7 @@ fn get_confidence_of_naive(naive: &NaiveDateTime) -> date_extractors::DateConfid
 }
 
 fn process_file(file: &Path, process_state: &ProcessState) {
-  info!("\"{}\": Processing file", file.display());
+  trace!("\"{}\": Processing file", file.display());
 
   let original_file_modified_time = get_modified_time(file);
 
@@ -309,7 +330,7 @@ fn process_file(file: &Path, process_state: &ProcessState) {
 
   // check that the file extension is a valid image extension
   if file_extension.is_none_or(|ext| !exif_tool_writable_file_extensions().contains(&ext)) {
-    info!(
+    trace!(
       "\"{}\": File is not an image file. Skipping.",
       file.display()
     );
@@ -562,7 +583,7 @@ fn main() {
   files.flatten().par_bridge().for_each(|file| {
     // check if the file is a directory
     if file.is_dir() {
-      process_dir(file, &process_state);
+      process_dir_recursive(file, &process_state);
     } else {
       process_file(file, &process_state);
     }

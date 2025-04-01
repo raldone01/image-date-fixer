@@ -32,6 +32,7 @@ pub fn get_exif_date(file: &Path) -> Option<NaiveDateTime> {
   }
 
   let date_str = String::from_utf8(output.stdout).unwrap();
+  let date_str = date_str.trim();
   NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S").ok()
 }
 

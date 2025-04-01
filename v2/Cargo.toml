@@ -11,7 +11,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chumsky = "0.10"
 chrono = "0.4"
-walkdir = "2.5"
+jwalk = "0.8"
 rayon = "1.10"
 ctrlc = "3.4"
 regex = "1.11"
