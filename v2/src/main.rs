@@ -9,7 +9,7 @@ use ariadne::{Color, Config, Label, Report, ReportKind, Source};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use chumsky::error::Cheap;
 use clap::{Arg, ArgAction, Command, command, value_parser};
-use date_extractors::get_date_for_file;
+use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
 use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
 use jwalk::WalkDir;
 use nom::{
@@ -24,10 +24,8 @@ use rayon::prelude::*;
 use regex::Regex;
 use std::{
   collections::BTreeSet,
-  fmt::Write as _,
-  io::{
-    Write as _, {self},
-  },
+  fmt::{Display, Write as _},
+  io::{self, Write as _},
   path::{Path, PathBuf},
   process::{self, exit},
   str::FromStr,
@@ -37,7 +35,7 @@ use std::{
   },
   time::{Duration, SystemTime},
 };
-use tracing::{Level, debug, error, info, trace, warn};
+use tracing::{Level, debug, error, event, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
 
 fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
@@ -164,7 +162,7 @@ impl ProcessState {
     }
   }
 
-  fn pretty_print_stats(&self) -> Result<(), Box<io::Error>> {
+  fn pretty_print_stats(&self) -> Result<(), io::Error> {
     let folders_processed = self.stat_folders_processed.load(Ordering::Relaxed);
     let folders_skipped = self.stat_folders_skipped.load(Ordering::Relaxed);
     let files_processed = self.stat_files_processed.load(Ordering::Relaxed);
@@ -291,165 +289,171 @@ const OLD_MODIFIED_TIME_THRESHOLD: NaiveDateTime = NaiveDateTime::new(
   NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
 );
 
-fn get_confidence_of_naive(naive: &NaiveDateTime) -> date_extractors::DateConfidence {
+fn get_confidence_of_naive(naive: &NaiveDateTime) -> DateConfidence {
   if *naive == OLD_MODIFIED_TIME_THRESHOLD {
-    return date_extractors::DateConfidence::None;
+    return DateConfidence::None;
   }
   if naive.second() != 0 {
-    return date_extractors::DateConfidence::Second;
+    return DateConfidence::Second;
   }
   if naive.minute() != 0 {
-    return date_extractors::DateConfidence::Minute;
+    return DateConfidence::Minute;
   }
   if naive.hour() != 0 {
-    return date_extractors::DateConfidence::Hour;
+    return DateConfidence::Hour;
   }
   if naive.day() != 1 {
-    return date_extractors::DateConfidence::Day;
+    return DateConfidence::Day;
   }
   if naive.month() != 1 {
-    return date_extractors::DateConfidence::Month;
+    return DateConfidence::Month;
   }
   if naive.year() % 10 != 0 {
-    return date_extractors::DateConfidence::Year;
+    return DateConfidence::Year;
   }
-  date_extractors::DateConfidence::Decade
+  DateConfidence::Decade
 }
 
-fn process_file(file: &Path, process_state: &ProcessState) {
-  trace!("\"{}\": Processing file", file.display());
+macro_rules! dyn_event {
+    ($lvl:ident, $($arg:tt)+) => {
+        match $lvl {
+            ::tracing::Level::TRACE => ::tracing::trace!($($arg)+),
+            ::tracing::Level::DEBUG => ::tracing::debug!($($arg)+),
+            ::tracing::Level::INFO => ::tracing::info!($($arg)+),
+            ::tracing::Level::WARN => ::tracing::warn!($($arg)+),
+            ::tracing::Level::ERROR => ::tracing::error!($($arg)+),
+        }
+    };
+}
 
-  let original_file_modified_time = get_modified_time(file);
+fn process_file(file_path: &Path, process_state: &ProcessState) {
+  trace!("\"{}\": Processing file", file_path.display());
+  process_state
+    .stat_files_processed
+    .fetch_add(1, Ordering::Relaxed);
+
+  let mut new_file_modified_time = None;
+  let mut new_exif_date = None;
+
+  let original_file_modified_time = get_modified_time(file_path);
+  let mut original_exif_date = None;
+  let mut guessed_date = None;
 
   if let Some(original_file_modified_time) = original_file_modified_time {
     // check if the original modified time is in the future
     if original_file_modified_time > process_state.modified_times_future_threshold {
       info!(
-        "\"{}\": File has a modified time in the future: {}. Setting it to the current time.",
-        file.display(),
+        "\"{}\": File has a modified time in the future: {}.",
+        file_path.display(),
         original_file_modified_time.format("%Y-%m-%d %H:%M:%S")
       );
-      if !set_modified_time(file, &process_state.start_time, process_state) {
-        error!("\"{}\": Failed to set modified time", file.display());
-        process_state
-          .stat_files_errors
-          .fetch_add(1, Ordering::Relaxed);
-        return;
-      }
+      new_file_modified_time = Some(process_state.start_time);
     }
     // check if the original modified time is before 1970-01-02
     else if original_file_modified_time < OLD_MODIFIED_TIME_THRESHOLD {
       info!(
-        "\"{}\": File has a modified time before 1970-01-02: {}. Setting it to 1970-01-02.",
-        file.display(),
+        "\"{}\": File has a modified time before 1970-01-02: {}.",
+        file_path.display(),
         original_file_modified_time.format("%Y-%m-%d %H:%M:%S")
       );
-      if !set_modified_time(file, &OLD_MODIFIED_TIME_THRESHOLD, process_state) {
-        error!("\"{}\": Failed to set modified time", file.display());
-        process_state
-          .stat_files_errors
-          .fetch_add(1, Ordering::Relaxed);
-        return;
-      }
+      new_file_modified_time = Some(OLD_MODIFIED_TIME_THRESHOLD);
     }
   }
 
-  let file_extension = file
+  let file_extension = file_path
     .extension()
     .and_then(|ext| ext.to_str())
     .map(str::to_ascii_uppercase);
 
-  // check that the file extension is a valid image extension
-  if file_extension.is_none_or(|ext| !exif_tool_writable_file_extensions().contains(&ext)) {
-    trace!(
-      "\"{}\": File is not an image file. Skipping.",
-      file.display()
-    );
-    process_state
-      .stat_files_skipped
-      .fetch_add(1, Ordering::Relaxed);
-    return;
+  // check that exif tool can work with this file type
+  if file_extension.is_some_and(|ext| exif_tool_writable_file_extensions().contains(&ext)) {
+    // guess the date from the file path
+    let file_name = file_path.file_name().unwrap().to_str().unwrap();
+    guessed_date =
+      get_date_for_file(file_path, file_name, process_state.start_time).or_else(|| {
+        let folder_path = file_path.parent().unwrap();
+        let folder_name = folder_path.file_name().unwrap().to_str().unwrap();
+        get_date_for_file(folder_path, folder_name, process_state.start_time)
+      });
+
+    // get the original exif date and its confidence
+    original_exif_date = get_exif_date(file_path).map(|date| {
+      let confidence = get_confidence_of_naive(&date);
+      ConfidentNaiveDateTime::new(date, confidence)
+    });
   }
 
-  let current_time = Local::now().naive_utc();
-
-  // guess the date from the file path
-  let file_name = file.file_name().unwrap().to_str().unwrap();
-  let guessed_date = get_date_for_file(file, file_name, current_time).or_else(|| {
-    let folder_path = file.parent().unwrap();
-    let folder_name = folder_path.file_name().unwrap().to_str().unwrap();
-    get_date_for_file(folder_path, folder_name, current_time)
-  });
-
-  // get the original exif date and its confidence
-  let original_exif_date = get_exif_date(file);
-
-  if let Some((date, confidence)) = guessed_date {
-    debug!(
-      "\"{}\": Guessed date: {} (confidence: {:?})",
-      file.display(),
-      date.format("%Y-%m-%d %H:%M:%S"),
-      confidence
-    );
-  } else if original_exif_date.is_none() {
-    warn!(
-      "\"{}\": Could not guess date from file path",
-      file.display()
-    );
-  }
-
-  let mut original_exif_confidence = date_extractors::DateConfidence::None;
+  // fix future exif dates
   if let Some(original_exif_date) = original_exif_date {
-    original_exif_confidence = get_confidence_of_naive(&original_exif_date);
-    debug!(
-      "\"{}\": Original EXIF date: {} (confidence: {:?})",
-      file.display(),
-      original_exif_date.format("%Y-%m-%d %H:%M:%S"),
-      original_exif_confidence
-    );
-
-    // fix future exif dates
-    if original_exif_date > process_state.exif_dates_future_threshold {
+    if original_exif_date.date > process_state.exif_dates_future_threshold {
       info!(
         "\"{}\": File has an EXIF date in the future: {}. Setting it to the current time.",
-        file.display(),
-        original_exif_date.format("%Y-%m-%d %H:%M:%S")
+        file_path.display(),
+        original_exif_date
       );
-      if !set_exif_date(file, &process_state.start_time, process_state.dry_run) {
-        error!("\"{}\": Failed to set EXIF date", file.display());
-        process_state
-          .stat_files_errors
-          .fetch_add(1, Ordering::Relaxed);
-        return;
-      }
+      new_exif_date = Some(ConfidentNaiveDateTime::new(
+        process_state.start_time,
+        DateConfidence::None,
+      ));
     }
   }
-  if let Some((date, confidence)) = guessed_date {
-    if confidence > original_exif_confidence && Some(date) != original_exif_date {
-      if let Some(original_exif_date) = original_exif_date {
-        info!(
-          "\"{}\": Overwriting EXIF date {} (confidence: {:?}) with guessed date {} (confidence: {:?})",
-          file.display(),
-          original_exif_date.format("%Y-%m-%d %H:%M:%S"),
-          original_exif_confidence,
-          date.format("%Y-%m-%d %H:%M:%S"),
-          confidence
-        );
-      } else {
-        info!(
-          "\"{}\": Setting EXIF date to guessed date {} (confidence: {:?})",
-          file.display(),
-          date.format("%Y-%m-%d %H:%M:%S"),
-          confidence
-        );
+
+  if let Some(original_exif_date) = original_exif_date {
+    if let Some(guessed_date) = guessed_date {
+      if guessed_date.confidence > original_exif_date.confidence
+        && guessed_date.date != original_exif_date.date
+      {
+        new_exif_date = Some(guessed_date);
       }
-      if !set_exif_date(file, &date, process_state.dry_run) {
-        error!("\"{}\": Failed to set EXIF date", file.display());
-        process_state
-          .stat_files_errors
-          .fetch_add(1, Ordering::Relaxed);
-        return;
-      }
+    }
+  } else {
+    new_exif_date = new_exif_date.or(guessed_date);
+  }
+
+  if original_exif_date.is_none() && new_exif_date.is_none() && guessed_date.is_none() {
+    let digit_count_in_file_name = file_path
+      .file_name()
+      .unwrap()
+      .to_str()
+      .unwrap()
+      .chars()
+      .filter(|c| c.is_digit(10))
+      .count();
+    let log_level = if digit_count_in_file_name > 4 {
+      Level::DEBUG
+    } else {
+      Level::TRACE
+    };
+    dyn_event!(
+      log_level,
+      "\"{}\": The file does not have an existing EXIF date, and no date could be guessed from the file name.",
+      file_path.display()
+    );
+  }
+
+  // overwrite or set the EXIF date
+  if let Some(new_exif_date) = new_exif_date {
+    if let Some(original_exif_date) = original_exif_date {
+      info!(
+        "\"{}\": Overwriting EXIF date {} (confidence: {:?}) with new EXIF date {} (confidence: {:?})",
+        file_path.display(),
+        original_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
+        original_exif_date.confidence,
+        new_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
+        new_exif_date.confidence
+      );
+    } else {
+      info!(
+        "\"{}\": Setting EXIF date to new EXIF date {} (confidence: {:?})",
+        file_path.display(),
+        new_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
+        new_exif_date.confidence
+      );
+    }
+
+    // write the new exif date
+    if set_exif_date(file_path, &new_exif_date.date, process_state.dry_run) {
+      // update the statistics
       if original_exif_date.is_some() {
         process_state
           .stat_exif_overwritten
@@ -459,6 +463,25 @@ fn process_file(file: &Path, process_state: &ProcessState) {
           .stat_exif_updated
           .fetch_add(1, Ordering::Relaxed);
       }
+    } else {
+      error!("\"{}\": Failed to set EXIF date", file_path.display());
+      process_state
+        .stat_files_errors
+        .fetch_add(1, Ordering::Relaxed);
+    }
+  }
+
+  // overwrite the modified time
+  if let Some(new_file_modified_time) = new_file_modified_time {
+    if set_modified_time(file_path, &new_file_modified_time, process_state) {
+      process_state
+        .stat_modified_time_updated
+        .fetch_add(1, Ordering::Relaxed);
+    } else {
+      error!("\"{}\": Failed to set modified time", file_path.display());
+      process_state
+        .stat_files_errors
+        .fetch_add(1, Ordering::Relaxed);
     }
   }
 }
@@ -526,7 +549,7 @@ fn new_argparser() -> clap::Command {
   )
 }
 
-fn main() -> Result<(), Box<io::Error>> {
+fn main() -> Result<(), io::Error> {
   let matches = new_argparser().get_matches();
 
   let files = matches

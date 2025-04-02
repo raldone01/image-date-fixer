@@ -13,6 +13,27 @@ pub enum DateConfidence {
   Second,
 }
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub struct ConfidentNaiveDateTime {
+  pub date: NaiveDateTime,
+  pub confidence: DateConfidence,
+}
+impl ConfidentNaiveDateTime {
+  pub fn new(date: NaiveDateTime, confidence: DateConfidence) -> Self {
+    Self { date, confidence }
+  }
+}
+impl core::fmt::Display for ConfidentNaiveDateTime {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    write!(
+      f,
+      "{} (confidence: {:?})",
+      self.date.format("%Y-%m-%d %H:%M:%S"),
+      self.confidence
+    )
+  }
+}
+
 mod android_style_image_paths;
 pub use android_style_image_paths::*;
 
@@ -48,7 +69,7 @@ pub fn get_date_for_file(
   file_path: &Path,
   file_name: &str,
   current_time: NaiveDateTime,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   // the uuid handler MUST come first!
   let handler_functions = vec![
     get_date_from_screenshot_prefixed_filepath_regex,
@@ -60,13 +81,13 @@ pub fn get_date_for_file(
 
   for handler in handler_functions {
     let ret = handler(file_path, file_name);
-    if let Some((date, confidence)) = ret {
+    if let Some(ret) = ret {
       // check if the date is in the future
-      if date > current_time {
+      if ret.date > current_time {
         // skip the handler if it returns an invalid date
         continue;
       }
-      return Some((date, confidence));
+      return Some(ret);
     }
   }
   None
@@ -83,15 +104,15 @@ mod test {
   };
   use std::sync::LazyLock;
 
-  #[derive(Debug, Clone, Copy)]
+  #[derive(PartialEq, Eq, Debug, Clone)]
   pub struct TestCase {
     pub file_path: &'static str,
-    pub expected_result: Option<(NaiveDateTime, DateConfidence)>,
+    pub expected_result: Option<ConfidentNaiveDateTime>,
   }
 
-  pub fn test_test_cases(
-    test_cases: &[TestCase],
-    parser: fn(&Path, &str) -> Option<(NaiveDateTime, DateConfidence)>,
+  pub fn test_test_cases<'a>(
+    test_cases: impl Iterator<Item = &'a TestCase>,
+    parser: fn(&Path, &str) -> Option<ConfidentNaiveDateTime>,
   ) {
     for test_case in test_cases {
       let file_path = Path::new(test_case.file_path);
@@ -115,7 +136,7 @@ mod test {
     assert!(DateConfidence::Minute < DateConfidence::Second);
   }
 
-  fn get_all_test_data() -> &'static [TestCase] {
+  fn get_all_test_data() -> impl Iterator<Item = &'static TestCase> {
     static ALL_TEST_CASES: LazyLock<Vec<TestCase>> = LazyLock::new(|| {
       [
         TESTS_ANDROID_FILEPATH.as_slice(),
@@ -126,7 +147,7 @@ mod test {
       ]
       .concat()
     });
-    ALL_TEST_CASES.as_slice()
+    ALL_TEST_CASES.as_slice().iter()
   }
 
   #[test]

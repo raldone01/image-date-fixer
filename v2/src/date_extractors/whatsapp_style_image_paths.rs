@@ -1,4 +1,4 @@
-use super::DateConfidence;
+use super::{ConfidentNaiveDateTime, DateConfidence};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use regex::Regex;
 use std::{path::Path, sync::LazyLock};
@@ -9,7 +9,7 @@ use std::{path::Path, sync::LazyLock};
 pub fn get_date_from_whatsapp_filepath_regex(
   _file_path: &Path,
   file_name: &str,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   static RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"IMG-(\d{4})(\d{2})(\d{2})-WA\d+").unwrap());
   let captures = RE.captures(file_name)?;
@@ -22,7 +22,7 @@ pub fn get_date_from_whatsapp_filepath_regex(
     NaiveDate::from_ymd_opt(year.try_into().ok()?, month, day)?,
     NaiveTime::from_hms_opt(0, 0, 0)?,
   );
-  Some((datetime, DateConfidence::Day))
+  Some(ConfidentNaiveDateTime::new(datetime, DateConfidence::Day))
 }
 
 #[cfg(test)]
@@ -35,7 +35,7 @@ pub mod test {
     vec![
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/IMG-20250127-WA0006.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDate::parse_from_str("20250127", "%Y%m%d")
             .unwrap()
             .into(),
@@ -44,7 +44,7 @@ pub mod test {
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/IMG-20250127-WA0006POSTFIX.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDate::parse_from_str("20250127", "%Y%m%d")
             .unwrap()
             .into(),
@@ -57,7 +57,7 @@ pub mod test {
   #[test]
   fn whatsapp_filepath_regex() {
     test_test_cases(
-      TESTS_WHATSAPP_FILEPATH.as_slice(),
+      TESTS_WHATSAPP_FILEPATH.iter(),
       get_date_from_whatsapp_filepath_regex,
     );
   }

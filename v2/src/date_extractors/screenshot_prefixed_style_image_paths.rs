@@ -1,4 +1,4 @@
-use super::{ChumError, DateConfidence, get_date_for_file};
+use super::{ChumError, ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use nom::IResult;
 use regex::Regex;
@@ -18,7 +18,7 @@ use std::{path::Path, str::FromStr, sync::LazyLock};
 pub fn get_date_from_screenshot_prefixed_filepath_regex(
   file_path: &Path,
   file_name: &str,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(screenshot[-_\s])").unwrap());
   let captures = RE.captures(file_name)?;
 
@@ -47,42 +47,42 @@ pub mod test {
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot 2020-09-15 191156.png",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("2020-09-15 19:11:56", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot_20240720_020223_Jerboa.png",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("2024-07-20 02:02:23", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot 2023-08-22 121704_windows_big_ad.png",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("2023-08-22 12:17:04", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/Screenshot_20241108_094517_Mull.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/screenshot_20241108_094517_Mull.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/storage/emulated/0/DCIM/Camera/screenshot-20241108_094517_Mull.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("2024-11-08 09:45:17", "%Y-%m-%d %H:%M:%S").unwrap(),
           DateConfidence::Second,
         )),
@@ -93,7 +93,7 @@ pub mod test {
   #[test]
   fn screenshot_prefixed_filepath_regex() {
     test_test_cases(
-      TESTS_SCREENSHOT_PREFIXED_FILEPATH.as_slice(),
+      TESTS_SCREENSHOT_PREFIXED_FILEPATH.iter(),
       get_date_from_screenshot_prefixed_filepath_regex,
     );
   }

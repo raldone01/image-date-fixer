@@ -1,4 +1,4 @@
-use super::{ChumError, DateConfidence};
+use super::{ChumError, ConfidentNaiveDateTime, DateConfidence};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use chumsky::{
   extra::ParserExtra,
@@ -17,10 +17,10 @@ use std::{path::Path, str::FromStr, sync::LazyLock};
 pub fn get_date_from_android_filepath_nom(
   _file_path: &Path,
   file_name: &str,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   parse_android_nom(file_name)
     .ok()
-    .map(|(_, datetime)| (datetime, DateConfidence::Second))
+    .map(|(_, datetime)| ConfidentNaiveDateTime::new(datetime, DateConfidence::Second))
 }
 
 fn parse_android_nom(filename: &str) -> IResult<&str, NaiveDateTime> {
@@ -73,7 +73,7 @@ fn parse_num<const N: usize>(num: &str) -> IResult<&str, u32> {
 pub fn get_date_from_android_filepath_regex(
   _file_path: &Path,
   file_name: &str,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   static RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"IMG_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})").unwrap());
   let captures = RE.captures(file_name)?;
@@ -89,7 +89,10 @@ pub fn get_date_from_android_filepath_regex(
     NaiveDate::from_ymd_opt(year.try_into().ok()?, month, day)?,
     NaiveTime::from_hms_opt(hour, minute, second)?,
   );
-  Some((datetime, DateConfidence::Second))
+  Some(ConfidentNaiveDateTime::new(
+    datetime,
+    DateConfidence::Second,
+  ))
 }
 
 #[must_use]
@@ -127,7 +130,7 @@ where
 pub fn get_date_from_android_filepath_chumsky(
   _file_path: &Path,
   file_name: &str,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   use chumsky::prelude::*;
 
   let prefix_parser = just::<_, _, extra::Err<ChumError>>("IMG_").ignored();
@@ -156,7 +159,10 @@ pub fn get_date_from_android_filepath_chumsky(
     NaiveDate::from_ymd_opt(year.try_into().ok()?, month, day)?,
     NaiveTime::from_hms_opt(hour, minute, second)?,
   );
-  Some((datetime, DateConfidence::Second))
+  Some(ConfidentNaiveDateTime::new(
+    datetime,
+    DateConfidence::Second,
+  ))
 }
 
 #[cfg(test)]
@@ -169,14 +175,14 @@ pub mod test {
     vec![
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("20190818130841", "%Y%m%d%H%M%S").unwrap(),
           DateConfidence::Second,
         )),
       },
       TestCase {
         file_path: "/home/user/Pictures/IMG_20190818_130841POSTFIX.jpg",
-        expected_result: Some((
+        expected_result: Some(ConfidentNaiveDateTime::new(
           NaiveDateTime::parse_from_str("20190818130841", "%Y%m%d%H%M%S").unwrap(),
           DateConfidence::Second,
         )),
@@ -191,7 +197,7 @@ pub mod test {
   #[test]
   fn android_filepath_nom() {
     test_test_cases(
-      TESTS_ANDROID_FILEPATH.as_slice(),
+      TESTS_ANDROID_FILEPATH.iter(),
       get_date_from_android_filepath_nom,
     );
   }
@@ -199,7 +205,7 @@ pub mod test {
   #[test]
   fn android_filepath_regex() {
     test_test_cases(
-      TESTS_ANDROID_FILEPATH.as_slice(),
+      TESTS_ANDROID_FILEPATH.iter(),
       get_date_from_android_filepath_regex,
     );
   }
@@ -207,7 +213,7 @@ pub mod test {
   #[test]
   fn android_filepath_chumsky() {
     test_test_cases(
-      TESTS_ANDROID_FILEPATH.as_slice(),
+      TESTS_ANDROID_FILEPATH.iter(),
       get_date_from_android_filepath_chumsky,
     );
   }

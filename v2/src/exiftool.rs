@@ -94,9 +94,9 @@ pub fn exif_tool_writable_file_extensions() -> &'static BTreeSet<String> {
       }
     }
 
-    // While exiftool supports pdf, it doesn't make sense to set the original date
-    // on a pdf file. So we remove it from the list.
-    extensions.remove("PDF");
+    // We remove file types that are supported by exiftool but make no sense for our program
+    extensions.remove("PDF"); // PDF files don't support the DateTimeOriginal
+    extensions.remove("PSC");
 
     extensions
   });

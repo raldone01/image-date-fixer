@@ -1,4 +1,4 @@
-use super::{ChumError, DateConfidence};
+use super::{ChumError, ConfidentNaiveDateTime, DateConfidence};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use nom::IResult;
 use regex::Regex;
@@ -10,7 +10,7 @@ use std::{path::Path, str::FromStr, sync::LazyLock};
 pub fn get_date_from_uuid_prefixed_filepath_regex(
   _file_path: &Path,
   file_name: &str,
-) -> Option<(NaiveDateTime, DateConfidence)> {
+) -> Option<ConfidentNaiveDateTime> {
   static RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})").unwrap()
   });
@@ -18,7 +18,10 @@ pub fn get_date_from_uuid_prefixed_filepath_regex(
 
   let timestamp = captures.get(1)?.as_str().parse::<i64>().ok()?;
   let datetime = DateTime::from_timestamp(timestamp / 1000, 0)?;
-  Some((datetime.naive_utc(), DateConfidence::Second))
+  Some(ConfidentNaiveDateTime::new(
+    datetime.naive_utc(),
+    DateConfidence::Second,
+  ))
 }
 
 #[cfg(test)]
@@ -32,14 +35,14 @@ pub mod test {
       vec![
         TestCase {
           file_path: "/home/user/Pictures/1606470461418-49b19a16-01a9-4a11-9789-e3005d827362.jpg",
-          expected_result: Some((
+          expected_result: Some(ConfidentNaiveDateTime::new(
             NaiveDateTime::parse_from_str("20201127094741", "%Y%m%d%H%M%S").unwrap(),
             DateConfidence::Second,
           )),
         },
         TestCase {
           file_path: "/home/user/Pictures/1606470461418-49b19a16-01a9-4a11-9789-e3005d827362postfix.jpg",
-          expected_result: Some((
+          expected_result: Some(ConfidentNaiveDateTime::new(
             NaiveDateTime::parse_from_str("20201127094741", "%Y%m%d%H%M%S").unwrap(),
             DateConfidence::Second,
           )),
@@ -51,7 +54,7 @@ pub mod test {
   #[test]
   fn uuid_prefixed_filepath_regex() {
     test_test_cases(
-      TESTS_UUID_TIMESTAMP_PREFIXED_FILEPATH.as_slice(),
+      TESTS_UUID_TIMESTAMP_PREFIXED_FILEPATH.iter(),
       get_date_from_uuid_prefixed_filepath_regex,
     );
   }
