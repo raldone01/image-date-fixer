@@ -116,7 +116,7 @@ fn pretty_duration(duration: Duration) -> String {
 }
 
 struct ProcessState {
-  excluded_files: Arc<BTreeSet<PathBuf>>,
+  excluded_files: BTreeSet<PathBuf>,
   skip_hidden_files: bool,
   exit_flag: AtomicBool,
   start_time: NaiveDateTime,
@@ -143,7 +143,7 @@ impl ProcessState {
     exif_dates_future_threshold: NaiveDateTime,
   ) -> Self {
     Self {
-      excluded_files: Arc::new(excluded_files),
+      excluded_files: excluded_files,
       skip_hidden_files,
       exit_flag: AtomicBool::new(true),
       start_time: Local::now().naive_utc(),
@@ -201,7 +201,7 @@ impl ProcessState {
   }
 }
 
-fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
+fn process_dir_recursive(root_dir: &Path, process_state: Arc<ProcessState>) {
   if !process_state.exit_flag.load(Ordering::Relaxed) {
     return;
   }
@@ -222,18 +222,23 @@ fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
 
   info!("\"{}\": Processing top level directory", root_dir.display());
 
-  let excluded_files = process_state.excluded_files.clone();
-  let entries = WalkDir::new(root_dir)
-    .skip_hidden(process_state.skip_hidden_files)
-    .process_read_dir(move |_depth, _path, _read_dir_state, children| {
-      // Filter out excluded directories
-      for child in children.iter_mut().flatten() {
-        if excluded_files.contains(&child.path()) {
-          child.read_children_path = None;
+  let entries = {
+    let process_state = process_state.clone();
+    WalkDir::new(root_dir)
+      .skip_hidden(process_state.skip_hidden_files)
+      .process_read_dir(move |_depth, _path, _read_dir_state, children| {
+        // Filter out excluded directories
+        for child in children.iter_mut().flatten() {
+          if process_state.excluded_files.contains(&child.path()) {
+            child.read_children_path = None;
+            process_state
+              .stat_folders_skipped
+              .fetch_add(1, Ordering::Relaxed);
+          }
         }
-      }
-    })
-    .into_iter();
+      })
+      .into_iter()
+  };
 
   let _ = entries.par_bridge().try_for_each(|entry_result| {
     let entry = match entry_result {
@@ -272,7 +277,7 @@ fn process_dir_recursive(root_dir: &Path, process_state: &ProcessState) {
         .fetch_add(1, Ordering::Relaxed);
       trace!("\"{}\": Processing directory", path.display());
     } else if entry.file_type().is_file() {
-      process_file(&path, process_state);
+      process_file(&path, &process_state);
     } else {
       process_state
         .stat_files_skipped
@@ -651,7 +656,7 @@ fn main() -> Result<(), io::Error> {
   files.flatten().par_bridge().for_each(|file| {
     // check if the file is a directory
     if file.is_dir() {
-      process_dir_recursive(file, &process_state);
+      process_dir_recursive(file, process_state.clone());
     } else {
       process_file(file, &process_state);
     }
