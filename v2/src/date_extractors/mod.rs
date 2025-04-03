@@ -49,6 +49,9 @@ pub use screenshot_prefixed_style_image_paths::*;
 mod custom_date_prefixed_style_image_paths;
 pub use custom_date_prefixed_style_image_paths::*;
 
+mod unix_time_stamp_prefixed_style_image_paths;
+pub use unix_time_stamp_prefixed_style_image_paths::*;
+
 use chrono::NaiveDateTime;
 use std::path::Path;
 
@@ -74,6 +77,7 @@ pub fn get_date_for_file(
   let handler_functions = vec![
     get_date_from_screenshot_prefixed_filepath_regex,
     get_date_from_uuid_prefixed_filepath_regex,
+    get_date_from_unix_timestamp_prefixed_filepath_regex,
     get_date_from_android_filepath_nom,
     get_date_from_whatsapp_filepath_regex,
     get_date_from_custom_date_prefixed_filepath_regex,
@@ -99,6 +103,7 @@ mod test {
     android_style_image_paths::test::TESTS_ANDROID_FILEPATH,
     custom_date_prefixed_style_image_paths::test::TESTS_CUSTOM_DATE_PREFIXED_FILEPATH,
     screenshot_prefixed_style_image_paths::test::TESTS_SCREENSHOT_PREFIXED_FILEPATH,
+    unix_time_stamp_prefixed_style_image_paths::test::TESTS_UNIX_TIMESTAMP_PREFIXED_FILEPATH,
     uuid_timestamp_prefixed_image_paths::test::TESTS_UUID_TIMESTAMP_PREFIXED_FILEPATH,
     whatsapp_style_image_paths::test::TESTS_WHATSAPP_FILEPATH, *,
   };
@@ -144,6 +149,7 @@ mod test {
         TESTS_UUID_TIMESTAMP_PREFIXED_FILEPATH.as_slice(),
         TESTS_SCREENSHOT_PREFIXED_FILEPATH.as_slice(),
         TESTS_CUSTOM_DATE_PREFIXED_FILEPATH.as_slice(),
+        TESTS_UNIX_TIMESTAMP_PREFIXED_FILEPATH.as_slice(),
       ]
       .concat()
     });
