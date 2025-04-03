@@ -1,5 +1,7 @@
 # `image-date-fixer`
 
+[![crates.io](https://img.shields.io/crates/v/image-date-fixer.svg)](https://crates.io/crates/image-date-fixer)
+
 `image-date-fixer` is a command-line tool written in Rust for restoring missing exif data from the filepath.
 This can be very useful for tagging photos received from friends or family, or for photos from legacy devices that do not support or strip exif data.
 
