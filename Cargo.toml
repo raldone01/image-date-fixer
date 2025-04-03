@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
-members = ["v2"]
 
 [workspace.lints.clippy]
 let_and_return = "allow"
@@ -75,3 +74,30 @@ inherits = "release"
 opt-level = "s"
 # Strip all debugging information from the binary to slightly reduce file size.
 strip = "debuginfo"
+
+[package]
+name = "image-date-fixer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4.5", features = ["cargo"] }
+thiserror = { version = "2.0", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chumsky = "0.10"
+chrono = "0.4"
+jwalk = "0.8"
+rayon = "1.10"
+ctrlc = "3.4"
+regex = "1.11"
+ariadne = { version = "0.5", features = ["auto-color"] }
+nom = "8.0"
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["-Zunstable-options", "--generate-link-to-definition"]
+all-features = true

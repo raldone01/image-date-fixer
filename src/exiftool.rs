@@ -12,15 +12,18 @@ pub fn has_exiftool() -> bool {
   output.status.success()
 }
 
-pub fn get_exif_date(file: &Path) -> Option<NaiveDateTime> {
-  let output = process::Command::new("exiftool")
+pub fn get_exif_date(file: &Path, ignore_minor_exif_errors: bool) -> Option<NaiveDateTime> {
+  let mut command_builder = process::Command::new("exiftool");
+  if ignore_minor_exif_errors {
+    command_builder.arg("-m");
+  }
+  command_builder
     .arg("-DateTimeOriginal")
     .arg("-d")
     .arg("%Y-%m-%d %H:%M:%S")
     .arg("-s3")
-    .arg(file)
-    .output()
-    .expect("Failed to run exiftool");
+    .arg(file);
+  let output = command_builder.output().expect("Failed to run exiftool");
 
   if !output.status.success() {
     error!(
@@ -36,7 +39,12 @@ pub fn get_exif_date(file: &Path) -> Option<NaiveDateTime> {
   NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S").ok()
 }
 
-pub fn set_exif_date(file: &Path, date: &NaiveDateTime, dry_run: bool) -> bool {
+pub fn set_exif_date(
+  file: &Path,
+  date: &NaiveDateTime,
+  dry_run: bool,
+  ignore_minor_exif_errors: bool,
+) -> bool {
   if dry_run {
     info!(
       "\"{}\": Would set EXIF date to {}",
@@ -47,12 +55,15 @@ pub fn set_exif_date(file: &Path, date: &NaiveDateTime, dry_run: bool) -> bool {
   }
 
   let date_str = date.format("%Y-%m-%d %H:%M:%S").to_string();
-  let output = process::Command::new("exiftool")
+  let mut command_builder = process::Command::new("exiftool");
+  if ignore_minor_exif_errors {
+    command_builder.arg("-m");
+  }
+  command_builder
     .arg("-overwrite_original")
     .arg(format!("-DateTimeOriginal={date_str}"))
-    .arg(file)
-    .output()
-    .expect("Failed to run exiftool");
+    .arg(file);
+  let output = command_builder.output().expect("Failed to run exiftool");
 
   if !output.status.success() {
     error!(

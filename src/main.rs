@@ -123,6 +123,7 @@ struct ProcessState {
   dry_run: bool,
   modified_times_future_threshold: NaiveDateTime,
   exif_dates_future_threshold: NaiveDateTime,
+  ignore_minor_exif_errors: bool,
 
   stat_folders_processed: AtomicUsize,
   stat_folders_skipped: AtomicUsize,
@@ -141,6 +142,7 @@ impl ProcessState {
     dry_run: bool,
     modified_times_future_threshold: NaiveDateTime,
     exif_dates_future_threshold: NaiveDateTime,
+    ignore_minor_exif_errors: bool,
   ) -> Self {
     Self {
       excluded_files: excluded_files,
@@ -150,6 +152,7 @@ impl ProcessState {
       dry_run,
       modified_times_future_threshold,
       exif_dates_future_threshold,
+      ignore_minor_exif_errors,
 
       stat_folders_processed: AtomicUsize::new(0),
       stat_folders_skipped: AtomicUsize::new(0),
@@ -391,10 +394,11 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
     }
 
     // get the original exif date and its confidence
-    original_exif_date = get_exif_date(file_path).map(|date| {
-      let confidence = get_confidence_of_naive(&date);
-      ConfidentNaiveDateTime::new(date, confidence)
-    });
+    original_exif_date =
+      get_exif_date(file_path, process_state.ignore_minor_exif_errors).map(|date| {
+        let confidence = get_confidence_of_naive(&date);
+        ConfidentNaiveDateTime::new(date, confidence)
+      });
 
     if let Some(original_exif_date) = original_exif_date {
       trace!(
@@ -440,7 +444,7 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
       .to_str()
       .unwrap()
       .chars()
-      .filter(|c| c.is_ascii_digit())
+      .filter(char::is_ascii_digit)
       .count();
     let log_level = if digit_count_in_file_name > 4 {
       Level::DEBUG
@@ -475,7 +479,12 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
     }
 
     // write the new exif date
-    if set_exif_date(file_path, &new_exif_date.date, process_state.dry_run) {
+    if set_exif_date(
+      file_path,
+      &new_exif_date.date,
+      process_state.dry_run,
+      process_state.ignore_minor_exif_errors,
+    ) {
       // update the statistics
       if original_exif_date.is_some() {
         process_state
@@ -570,6 +579,12 @@ fn new_argparser() -> clap::Command {
     .help("Skip hidden files")
     .action(ArgAction::SetTrue),
   )
+  .arg(
+    Arg::new("ignore-minor-exif-errors")
+    .long("ignore-minor-exif-errors")
+    .help("Ignore minor EXIF errors")
+    .action(ArgAction::SetTrue),
+  )
 }
 
 fn main() -> Result<(), io::Error> {
@@ -635,6 +650,10 @@ fn main() -> Result<(), io::Error> {
     .get_one::<bool>("skip-hidden-files")
     .copied()
     .unwrap_or(false);
+  let ignore_minor_exif_errors = matches
+    .get_one::<bool>("ignore-minor-exif-errors")
+    .copied()
+    .unwrap_or(false);
 
   if print_supported_file_extensions {
     // Acquire a lock on standard output for buffered writing
@@ -660,6 +679,7 @@ fn main() -> Result<(), io::Error> {
     dry_run,
     modified_times_future_threshold,
     exif_dates_future_threshold,
+    ignore_minor_exif_errors,
   ));
 
   let ctrlc_process_state = process_state.clone();
