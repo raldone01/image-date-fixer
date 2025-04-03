@@ -201,7 +201,7 @@ impl ProcessState {
   }
 }
 
-fn process_dir_recursive(root_dir: &Path, process_state: Arc<ProcessState>) {
+fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
   if !process_state.exit_flag.load(Ordering::Relaxed) {
     return;
   }
@@ -381,11 +381,29 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
         get_date_for_file(folder_path, folder_name, process_state.start_time)
       });
 
+    if let Some(guessed_date) = guessed_date {
+      trace!(
+        "\"{}\": Guessed date from file name: {} (confidence: {:?})",
+        file_path.display(),
+        guessed_date.date.format("%Y-%m-%d %H:%M:%S"),
+        guessed_date.confidence
+      );
+    }
+
     // get the original exif date and its confidence
     original_exif_date = get_exif_date(file_path).map(|date| {
       let confidence = get_confidence_of_naive(&date);
       ConfidentNaiveDateTime::new(date, confidence)
     });
+
+    if let Some(original_exif_date) = original_exif_date {
+      trace!(
+        "\"{}\": Original EXIF date: {} (confidence: {:?})",
+        file_path.display(),
+        original_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
+        original_exif_date.confidence
+      );
+    }
   }
 
   // fix future exif dates
@@ -422,7 +440,7 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
       .to_str()
       .unwrap()
       .chars()
-      .filter(|c| c.is_digit(10))
+      .filter(|c| c.is_ascii_digit())
       .count();
     let log_level = if digit_count_in_file_name > 4 {
       Level::DEBUG
@@ -656,7 +674,7 @@ fn main() -> Result<(), io::Error> {
   files.flatten().par_bridge().for_each(|file| {
     // check if the file is a directory
     if file.is_dir() {
-      process_dir_recursive(file, process_state.clone());
+      process_dir_recursive(file, &process_state);
     } else {
       process_file(file, &process_state);
     }
