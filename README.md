@@ -22,7 +22,17 @@ This can be very useful for tagging photos received from friends or family, or f
 - `--print-stats` will show a summary of the changes made
 - Use `--help` to see all available options
 
-## Example usage
+## Example usage - from binary
+
+Make sure to add `~/.cargo/bin` to your `PATH`.
+
+```shell
+cargo install image-date-fixer
+image-date-fixer --print-stats --ignore-minor-exif-errors  --log-level INFO --fix-future-modified-times 2 --fix-future-exif-dates 2 --files /my_folder_with_images --exclude-files /my_folder_with_images/ignored --dry-run
+```
+
+
+## Example usage - from source
 
 ```shell
 git clone <this repo>
@@ -46,6 +56,7 @@ In particular, we are interested in:
 - Switching to bindings for `libexif` for a massive speedup.
 - Support more parent directory levels.
 - Support asking ollama for a smarter date resolution powered by ai.
+- Add support for limiting the amount of parallel exiftool calls to increase responsiveness of the system.
 
 Your contributions help make `image-date-fixer` more robust and useful for everyone!
 
