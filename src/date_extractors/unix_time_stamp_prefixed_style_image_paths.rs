@@ -1,8 +1,7 @@
 use super::{ConfidentNaiveDateTime, DateConfidence};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
-use nom::IResult;
+use chrono::DateTime;
 use regex::Regex;
-use std::{path::Path, str::FromStr, sync::LazyLock};
+use std::{path::Path, sync::LazyLock};
 
 /// Extracts the date from unix timestamp prefixed image file paths.
 /// Example file paths:
@@ -24,6 +23,8 @@ pub fn get_date_from_unix_timestamp_prefixed_filepath_regex(
 
 #[cfg(test)]
 pub mod test {
+  use chrono::NaiveDateTime;
+
   use super::*;
   use crate::date_extractors::test::{TestCase, test_test_cases};
   use std::sync::LazyLock;

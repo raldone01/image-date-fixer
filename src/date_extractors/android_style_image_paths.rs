@@ -24,14 +24,7 @@ pub fn get_date_from_android_filepath_nom(
 }
 
 fn parse_android_nom(filename: &str) -> IResult<&str, NaiveDateTime> {
-  use nom::{
-    IResult, Parser,
-    bytes::complete::{tag, take},
-    character::complete::char,
-    combinator::{map_opt, map_res},
-    error::Error,
-    multi::many0,
-  };
+  use nom::{Parser, bytes::complete::tag, character::complete::char, combinator::map_opt};
 
   let (input, _) = tag("IMG_")(filename)?;
   map_opt(
@@ -55,14 +48,7 @@ fn parse_android_nom(filename: &str) -> IResult<&str, NaiveDateTime> {
 }
 
 fn parse_num<const N: usize>(num: &str) -> IResult<&str, u32> {
-  use nom::{
-    IResult, Parser,
-    bytes::complete::{tag, take},
-    character::complete::char,
-    combinator::{map_opt, map_res},
-    error::Error,
-    multi::many0,
-  };
+  use nom::{Parser, bytes::complete::take, combinator::map_res};
 
   map_res(take(N), u32::from_str).parse(num)
 }
@@ -70,6 +56,7 @@ fn parse_num<const N: usize>(num: &str) -> IResult<&str, u32> {
 /// Extracts the date from Android-style image file paths.
 /// Example file paths:
 ///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
+#[allow(dead_code)]
 pub fn get_date_from_android_filepath_regex(
   _file_path: &Path,
   file_name: &str,
@@ -95,6 +82,7 @@ pub fn get_date_from_android_filepath_regex(
   ))
 }
 
+#[allow(dead_code)]
 #[must_use]
 pub fn int_n<'src, I, E>(
   radix: u32,
@@ -127,6 +115,7 @@ where
 }
 
 /// /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
+#[allow(dead_code)]
 pub fn get_date_from_android_filepath_chumsky(
   _file_path: &Path,
   file_name: &str,

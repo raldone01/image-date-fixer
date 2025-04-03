@@ -1,6 +1,5 @@
-use std::{collections::BTreeSet, path::Path, process, sync::LazyLock};
-
 use chrono::NaiveDateTime;
+use std::{collections::BTreeSet, path::Path, process, sync::LazyLock};
 use tracing::{error, info};
 
 pub fn has_exiftool() -> bool {

@@ -56,6 +56,7 @@ use chrono::NaiveDateTime;
 use std::path::Path;
 
 /// Prints the reports from the vector of errors
+#[allow(dead_code)]
 pub fn print_chumsky_errors<'a>(errors: impl Iterator<Item = &'a ChumError>, source: &str) {
   use ariadne::{Label, Report, ReportKind, Source};
 

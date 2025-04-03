@@ -42,6 +42,10 @@ In particular, we are interested in:
 - Enhancing error handling and logging.
 - Improving false positive rates.
 - Adding tests with real files.
+- Fixing more clippy warnings.
+- Switching to bindings for `libexif` for a massive speedup.
+- Support more parent directory levels.
+- Support asking ollama for a smarter date resolution powered by ai.
 
 Your contributions help make `image-date-fixer` more robust and useful for everyone!
 

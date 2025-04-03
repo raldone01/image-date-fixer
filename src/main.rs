@@ -1,41 +1,28 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
 #![allow(missing_docs)]
 
 mod date_extractors;
 mod exiftool;
 
-use ariadne::{Color, Config, Label, Report, ReportKind, Source};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use chumsky::error::Cheap;
-use clap::{Arg, ArgAction, Command, command, value_parser};
+use clap::{Arg, ArgAction, command, value_parser};
 use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
 use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
 use jwalk::WalkDir;
-use nom::{
-  IResult,
-  bytes::complete::{tag, take},
-  character::complete::char,
-  combinator::{map_opt, map_res},
-  error::Error,
-  multi::many0,
-};
 use rayon::prelude::*;
-use regex::Regex;
 use std::{
   collections::BTreeSet,
-  fmt::{Display, Write as _},
+  fmt::Write as _,
   io::{self, Write as _},
   path::{Path, PathBuf},
-  process::{self, exit},
+  process::exit,
   str::FromStr,
   sync::{
-    Arc, LazyLock,
+    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
   },
-  time::{Duration, SystemTime},
+  time::Duration,
 };
-use tracing::{Level, debug, error, event, info, trace, warn};
+use tracing::{Level, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
 
 fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
