@@ -6,7 +6,7 @@ mod date_extractors;
 mod exiftool;
 
 use alloc::{collections::BTreeSet, sync::Arc};
-use anyhow::{Context, bail};
+use anyhow::{Context as _, bail};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use clap::{Arg, ArgAction, command, value_parser};
 use core::{
@@ -27,15 +27,18 @@ use std::{
 use tracing::{Level, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
 
-#[must_use]
-fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
+fn set_modified_time(
+  file_path: &Path,
+  date: &NaiveDateTime,
+  process_state: &ProcessState,
+) -> anyhow::Result<()> {
   if process_state.dry_run {
     info!(
       "\"{}\": Would set modified time to {}",
       file_path.display(),
       date.format("%Y-%m-%d %H:%M:%S")
     );
-    return true;
+    return Ok(());
   }
 
   // TODO: https://doc.rust-lang.org/std/fs/fn.set_times.html once it is stabilized.
@@ -43,13 +46,19 @@ fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &Pro
   let file = match file {
     Ok(file) => file,
     Err(e) => {
-      error!("\"{}\": Failed to open file: {}", file_path.display(), e);
-      return false;
+      return Err(anyhow::anyhow!(
+        "\"{}\": Failed to open file: {}",
+        file_path.display(),
+        e
+      ));
     },
   };
 
   let date_time = DateTime::<Utc>::from_naive_utc_and_offset(*date, Utc);
-  file.set_modified(date_time.into()).is_ok()
+  file
+    .set_modified(date_time.into())
+    .context("Failed to set modified time")?;
+  Ok(())
 }
 
 #[must_use]
@@ -86,50 +95,50 @@ fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
 
 #[must_use]
 fn pretty_duration(duration: Duration) -> String {
-  let mut result = String::with_capacity(32);
-  let secs = duration.as_secs();
-
   const SECONDS_PER_MINUTE: u64 = 60;
   const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
   const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
+
+  let mut result = String::with_capacity(32);
+  let secs = duration.as_secs();
 
   if secs >= SECONDS_PER_DAY {
     let days = secs / SECONDS_PER_DAY;
     let hours = (secs % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
     let minutes = (secs % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
 
-    write!(result, "{}d", days).unwrap();
+    write!(result, "{days}d").unwrap();
     if hours > 0 {
-      write!(result, " {}h", hours).unwrap();
+      write!(result, " {hours}h").unwrap();
     }
     if minutes > 0 {
-      write!(result, " {}m", minutes).unwrap();
+      write!(result, " {minutes}m").unwrap();
     }
   } else if secs >= SECONDS_PER_HOUR {
     let hours = secs / SECONDS_PER_HOUR;
     let minutes = (secs % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
     let seconds = secs % SECONDS_PER_MINUTE;
 
-    write!(result, "{}h", hours).unwrap();
+    write!(result, "{hours}h").unwrap();
     if minutes > 0 {
-      write!(result, " {}m", minutes).unwrap();
+      write!(result, " {minutes}m").unwrap();
     }
     if seconds > 0 {
-      write!(result, " {}s", seconds).unwrap();
+      write!(result, " {seconds}s").unwrap();
     }
   } else if secs >= SECONDS_PER_MINUTE {
     let minutes = secs / SECONDS_PER_MINUTE;
     let seconds = secs % SECONDS_PER_MINUTE;
 
-    write!(result, "{}m", minutes).unwrap();
+    write!(result, "{minutes}m").unwrap();
     if seconds > 0 {
-      write!(result, " {}s", seconds).unwrap();
+      write!(result, " {seconds}s").unwrap();
     }
   } else if secs >= 1 {
     let millis = duration.subsec_millis();
-    write!(result, "{}s", secs).unwrap();
+    write!(result, "{secs}s").unwrap();
     if millis > 0 {
-      write!(result, " {}ms", millis).unwrap();
+      write!(result, " {millis}ms").unwrap();
     }
   } else {
     // Sub-second handling
@@ -140,19 +149,19 @@ fn pretty_duration(duration: Duration) -> String {
     } else if nanos >= 1_000_000 {
       let millis = nanos / 1_000_000;
       let micros = (nanos % 1_000_000) / 1_000;
-      write!(result, "{}ms", millis).unwrap();
+      write!(result, "{millis}ms").unwrap();
       if micros > 0 {
-        write!(result, " {}µs", micros).unwrap();
+        write!(result, " {micros}µs").unwrap();
       }
     } else if nanos >= 1_000 {
       let micros = nanos / 1_000;
       let ns = nanos % 1_000;
-      write!(result, "{}µs", micros).unwrap();
+      write!(result, "{micros}µs").unwrap();
       if ns > 0 {
-        write!(result, " {}ns", ns).unwrap();
+        write!(result, " {ns}ns").unwrap();
       }
     } else {
-      write!(result, "{}ns", nanos).unwrap();
+      write!(result, "{nanos}ns").unwrap();
     }
   }
 
@@ -394,7 +403,16 @@ macro_rules! dyn_event {
     };
 }
 
-fn process_file(file_path: &Path, process_state: &ProcessState) {
+fn process_file(file_path: &Path, process_state: &Arc<ProcessState>) {
+  if let Err(e) = process_file_internal(file_path, process_state) {
+    error!("\"{}\": Failed to process file: {}", file_path.display(), e);
+    process_state
+      .stat_files_errors
+      .fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyhow::Result<()> {
   trace!("\"{}\": Processing file", file_path.display());
   process_state
     .stat_files_processed
@@ -434,7 +452,8 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
     .map(str::to_ascii_uppercase);
 
   // check that exif tool can work with this file type
-  if file_extension.is_some_and(|ext| exif_tool_writable_file_extensions().contains(&ext)) {
+  let exif_tool_writable_file_extensions = exif_tool_writable_file_extensions()?;
+  if file_extension.is_some_and(|ext| exif_tool_writable_file_extensions.contains(&ext)) {
     // guess the date from the file path
     let file_name = file_path
       .file_name()
@@ -442,10 +461,7 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
       .to_string_lossy();
     guessed_date =
       get_date_for_file(file_path, &file_name, process_state.start_time).or_else(|| {
-        let folder_path = match file_path.parent() {
-          Some(parent) => parent,
-          None => return None,
-        };
+        let folder_path = file_path.parent()?;
         let folder_name = folder_path
           .file_name()
           .expect("Folder name should be present")
@@ -464,7 +480,7 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
 
     // get the original exif date and its confidence
     original_exif_date =
-      get_exif_date(file_path, process_state.ignore_minor_exif_errors).map(|date| {
+      get_exif_date(file_path, process_state.ignore_minor_exif_errors)?.map(|date| {
         let confidence = get_confidence_of_naive(&date);
         ConfidentNaiveDateTime::new(date, confidence)
       });
@@ -552,7 +568,7 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
       &new_exif_date.date,
       process_state.dry_run,
       process_state.ignore_minor_exif_errors,
-    ) {
+    )? {
       // update the statistics
       if original_exif_date.is_some() {
         process_state
@@ -573,17 +589,13 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
 
   // overwrite the modified time
   if let Some(new_file_modified_time) = new_file_modified_time {
-    if set_modified_time(file_path, &new_file_modified_time, process_state) {
-      process_state
-        .stat_modified_time_updated
-        .fetch_add(1, Ordering::Relaxed);
-    } else {
-      error!("\"{}\": Failed to set modified time", file_path.display());
-      process_state
-        .stat_files_errors
-        .fetch_add(1, Ordering::Relaxed);
-    }
+    set_modified_time(file_path, &new_file_modified_time, process_state)?;
+    process_state
+      .stat_modified_time_updated
+      .fetch_add(1, Ordering::Relaxed);
   }
+
+  Ok(())
 }
 
 #[must_use]
@@ -761,7 +773,7 @@ fn main() -> anyhow::Result<()> {
 
     writeln!(&mut stdout, "Supported file extensions:")?;
     let items_per_line = 10;
-    for (i, extension) in exif_tool_writable_file_extensions().iter().enumerate() {
+    for (i, extension) in exif_tool_writable_file_extensions()?.iter().enumerate() {
       if i % items_per_line == 0 {
         write!(&mut stdout, "  ")?;
       }
@@ -791,18 +803,18 @@ fn main() -> anyhow::Result<()> {
   })
   .expect("Error setting Ctrl+C handler");
 
-  files.par_bridge().for_each(|file| {
+  files.par_bridge().for_each(|file_path| {
     // check if the file is a directory
-    if file.is_dir() {
-      process_dir_recursive(file, &process_state);
+    if file_path.is_dir() {
+      process_dir_recursive(file_path, &process_state);
     } else {
-      if is_excluded(&file, &process_state.excluded_files) {
+      if is_excluded(file_path, &process_state.excluded_files) {
         process_state
           .stat_files_skipped
           .fetch_add(1, Ordering::Relaxed);
         return;
       }
-      process_file(file, &process_state);
+      process_file(file_path, &process_state);
     }
   });
 
