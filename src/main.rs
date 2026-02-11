@@ -81,25 +81,76 @@ fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
 }
 
 fn pretty_duration(duration: Duration) -> String {
-  let mut duration = duration;
-  let mut result = String::new();
-  if duration.as_secs() >= 86400 {
-    let days = duration.as_secs() / 86400;
-    write!(result, "{days}d ").unwrap();
-    duration -= Duration::from_secs(days * 86400);
+  let mut result = String::with_capacity(32);
+  let secs = duration.as_secs();
+
+  const SECONDS_PER_MINUTE: u64 = 60;
+  const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
+  const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
+
+  if secs >= SECONDS_PER_DAY {
+    let days = secs / SECONDS_PER_DAY;
+    let hours = (secs % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
+    let minutes = (secs % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+
+    write!(result, "{}d", days).unwrap();
+    if hours > 0 {
+      write!(result, " {}h", hours).unwrap();
+    }
+    if minutes > 0 {
+      write!(result, " {}m", minutes).unwrap();
+    }
+  } else if secs >= SECONDS_PER_HOUR {
+    let hours = secs / SECONDS_PER_HOUR;
+    let minutes = (secs % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+    let seconds = secs % SECONDS_PER_MINUTE;
+
+    write!(result, "{}h", hours).unwrap();
+    if minutes > 0 {
+      write!(result, " {}m", minutes).unwrap();
+    }
+    if seconds > 0 {
+      write!(result, " {}s", seconds).unwrap();
+    }
+  } else if secs >= SECONDS_PER_MINUTE {
+    let minutes = secs / SECONDS_PER_MINUTE;
+    let seconds = secs % SECONDS_PER_MINUTE;
+
+    write!(result, "{}m", minutes).unwrap();
+    if seconds > 0 {
+      write!(result, " {}s", seconds).unwrap();
+    }
+  } else if secs >= 1 {
+    let millis = duration.subsec_millis();
+    write!(result, "{}s", secs).unwrap();
+    if millis > 0 {
+      write!(result, " {}ms", millis).unwrap();
+    }
+  } else {
+    // Sub-second handling
+    let nanos = duration.subsec_nanos();
+
+    if nanos == 0 {
+      return "0ns".to_string();
+    } else if nanos >= 1_000_000 {
+      let millis = nanos / 1_000_000;
+      let micros = (nanos % 1_000_000) / 1_000;
+      write!(result, "{}ms", millis).unwrap();
+      if micros > 0 {
+        write!(result, " {}µs", micros).unwrap();
+      }
+    } else if nanos >= 1_000 {
+      let micros = nanos / 1_000;
+      let ns = nanos % 1_000;
+      write!(result, "{}µs", micros).unwrap();
+      if ns > 0 {
+        write!(result, " {}ns", ns).unwrap();
+      }
+    } else {
+      write!(result, "{}ns", nanos).unwrap();
+    }
   }
-  if duration.as_secs() >= 3600 {
-    let hours = duration.as_secs() / 3600;
-    write!(result, "{hours}h ").unwrap();
-    duration -= Duration::from_secs(hours * 3600);
-  }
-  if duration.as_secs() >= 60 {
-    let minutes = duration.as_secs() / 60;
-    write!(result, "{minutes}m ").unwrap();
-    duration -= Duration::from_secs(minutes * 60);
-  }
-  let seconds = duration.as_secs();
-  write!(result, "{seconds}s").unwrap();
+
   result
 }
 
@@ -198,10 +249,7 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     return;
   }
 
-  if process_state
-    .excluded_files
-    .contains(&root_dir.to_path_buf())
-  {
+  if process_state.excluded_files.contains(root_dir) {
     process_state
       .stat_folders_skipped
       .fetch_add(1, Ordering::Relaxed);
