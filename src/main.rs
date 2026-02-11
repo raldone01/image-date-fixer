@@ -124,6 +124,7 @@ struct ProcessState {
 }
 
 impl ProcessState {
+  #[must_use]
   fn new(
     excluded_files: BTreeSet<PathBuf>,
     skip_hidden_files: bool,
