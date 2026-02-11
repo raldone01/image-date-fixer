@@ -50,7 +50,7 @@ impl ExifToolWorker {
       .as_mut()
       .context("Failed to capture stdin")?;
     for arg in args {
-      writeln!(stdin, "{}", arg.as_ref()).context("Failed to write to exiftool")?;
+      writeln!(stdin, "{}", arg.as_ref()).context("Failed to write args to exiftool")?;
     }
     writeln!(stdin, "-execute").context("Failed to execute command")?;
 
