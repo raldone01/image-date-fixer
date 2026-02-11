@@ -138,7 +138,7 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
 
   // Parse day if available.
   let maybe_day = maybe_month
-    .and(captures.name("day"))
+    .and_then(|_| captures.name("day"))
     .and_then(|day_match| day_match.as_str().parse::<u32>().ok());
   let day = if let Some(day) = maybe_day {
     confidence = DateConfidence::Day;
@@ -149,7 +149,7 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
 
   // Parse hour if available.
   let maybe_hour = maybe_day
-    .and(captures.name("hour"))
+    .and_then(|_| captures.name("hour"))
     .and_then(|hour_match| hour_match.as_str().parse::<u32>().ok());
   let hour = if let Some(hour) = maybe_hour {
     confidence = DateConfidence::Hour;
@@ -160,7 +160,7 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
 
   // Parse minute if available.
   let maybe_minute = maybe_hour
-    .and(captures.name("minute"))
+    .and_then(|_| captures.name("minute"))
     .and_then(|minute_match| minute_match.as_str().parse::<u32>().ok());
   let minute = if let Some(minute) = maybe_minute {
     confidence = DateConfidence::Minute;
@@ -171,7 +171,7 @@ pub fn get_date_from_custom_date_prefixed_filepath_regex(
 
   // Parse second if available.
   let maybe_second = maybe_minute
-    .and(captures.name("second"))
+    .and_then(|_| captures.name("second"))
     .and_then(|second_match| second_match.as_str().parse::<u32>().ok());
   let second = if let Some(second) = maybe_second {
     confidence = DateConfidence::Second;

@@ -7,9 +7,10 @@ use chumsky::{
   text::{Char, TextExpected},
   util::MaybeRef,
 };
+use core::str::FromStr as _;
 use nom::IResult;
 use regex::Regex;
-use std::{path::Path, str::FromStr, sync::LazyLock};
+use std::{path::Path, sync::LazyLock};
 
 /// Extracts the date from Android-style image file paths.
 /// Example file paths:
@@ -92,8 +93,7 @@ where
   I: StrInput<'src>,
   I::Token: Char + 'src,
   E: ParserExtra<'src, I>,
-  E::Error:
-    LabelError<'src, I, TextExpected<'src, I>> + LabelError<'src, I, MaybeRef<'src, I::Token>>,
+  E::Error: LabelError<'src, I, TextExpected<I>> + LabelError<'src, I, MaybeRef<'src, I::Token>>,
 {
   use chumsky::prelude::*;
 
@@ -103,7 +103,7 @@ where
         Ok(())
       } else {
         Err(LabelError::expected_found(
-          [TextExpected::Digit(0..radix)],
+          [TextExpected::Digit(0, radix)],
           Some(MaybeRef::Val(c)),
           span,
         ))

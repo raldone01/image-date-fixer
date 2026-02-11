@@ -92,13 +92,13 @@ clap = { version = "4.5", features = ["cargo"] }
 thiserror = { version = "2.0", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-chumsky = "0.10"
+chumsky = "0.12"
 chrono = "0.4"
 jwalk = "0.8"
 rayon = "1.10"
 ctrlc = "3.4"
 regex = "1.11"
-ariadne = { version = "0.5", features = ["auto-color"] }
+ariadne = { version = "0.6", features = ["auto-color"] }
 nom = "8.0"
 
 [lints]

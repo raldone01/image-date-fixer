@@ -19,7 +19,7 @@ pub struct ConfidentNaiveDateTime {
   pub confidence: DateConfidence,
 }
 impl ConfidentNaiveDateTime {
-  pub fn new(date: NaiveDateTime, confidence: DateConfidence) -> Self {
+  pub const fn new(date: NaiveDateTime, confidence: DateConfidence) -> Self {
     Self { date, confidence }
   }
 }

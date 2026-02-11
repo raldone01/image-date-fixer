@@ -1,26 +1,27 @@
-#![allow(missing_docs)]
+//! A tool to extract possible timestamp information from filenames and set EXIF and modified times accordingly.
+
+extern crate alloc;
 
 mod date_extractors;
 mod exiftool;
 
+use alloc::{collections::BTreeSet, sync::Arc};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use clap::{Arg, ArgAction, command, value_parser};
+use core::{
+  fmt::Write as _,
+  str::FromStr as _,
+  sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+  time::Duration,
+};
 use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
 use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
 use jwalk::WalkDir;
 use rayon::prelude::*;
 use std::{
-  collections::BTreeSet,
-  fmt::Write as _,
   io::{self, Write as _},
   path::{Path, PathBuf},
   process::exit,
-  str::FromStr,
-  sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-  },
-  time::Duration,
 };
 use tracing::{Level, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
@@ -132,7 +133,7 @@ impl ProcessState {
     ignore_minor_exif_errors: bool,
   ) -> Self {
     Self {
-      excluded_files: excluded_files,
+      excluded_files,
       skip_hidden_files,
       exit_flag: AtomicBool::new(true),
       start_time: Local::now().naive_utc(),
@@ -267,7 +268,7 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
         .fetch_add(1, Ordering::Relaxed);
       trace!("\"{}\": Processing directory", path.display());
     } else if entry.file_type().is_file() {
-      process_file(&path, &process_state);
+      process_file(&path, process_state);
     } else {
       process_state
         .stat_files_skipped
@@ -398,27 +399,26 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
   }
 
   // fix future exif dates
-  if let Some(original_exif_date) = original_exif_date {
-    if original_exif_date.date > process_state.exif_dates_future_threshold {
-      info!(
-        "\"{}\": File has an EXIF date in the future: {}. Setting it to the current time.",
-        file_path.display(),
-        original_exif_date
-      );
-      new_exif_date = Some(ConfidentNaiveDateTime::new(
-        process_state.start_time,
-        DateConfidence::None,
-      ));
-    }
+  if let Some(original_exif_date) = original_exif_date
+    && original_exif_date.date > process_state.exif_dates_future_threshold
+  {
+    info!(
+      "\"{}\": File has an EXIF date in the future: {}. Setting it to the current time.",
+      file_path.display(),
+      original_exif_date
+    );
+    new_exif_date = Some(ConfidentNaiveDateTime::new(
+      process_state.start_time,
+      DateConfidence::None,
+    ));
   }
 
   if let Some(original_exif_date) = original_exif_date {
-    if let Some(guessed_date) = guessed_date {
-      if guessed_date.confidence > original_exif_date.confidence
-        && guessed_date.date != original_exif_date.date
-      {
-        new_exif_date = Some(guessed_date);
-      }
+    if let Some(guessed_date) = guessed_date
+      && guessed_date.confidence > original_exif_date.confidence
+      && guessed_date.date != original_exif_date.date
+    {
+      new_exif_date = Some(guessed_date);
     }
   } else {
     new_exif_date = new_exif_date.or(guessed_date);
@@ -577,13 +577,10 @@ fn new_argparser() -> clap::Command {
 fn main() -> Result<(), io::Error> {
   let matches = new_argparser().get_matches();
 
-  let files = matches
-    .get_occurrences::<PathBuf>("files")
-    .unwrap_or_default();
+  let files = matches.get_many::<PathBuf>("files").unwrap_or_default();
   let excluded_files = matches
-    .get_occurrences::<PathBuf>("exclude-files")
+    .get_many::<PathBuf>("exclude-files")
     .unwrap_or_default()
-    .flatten()
     .cloned()
     .collect();
 
@@ -678,7 +675,7 @@ fn main() -> Result<(), io::Error> {
   })
   .expect("Error setting Ctrl+C handler");
 
-  files.flatten().par_bridge().for_each(|file| {
+  files.par_bridge().for_each(|file| {
     // check if the file is a directory
     if file.is_dir() {
       process_dir_recursive(file, &process_state);
