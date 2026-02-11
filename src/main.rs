@@ -6,6 +6,7 @@ mod date_extractors;
 mod exiftool;
 
 use alloc::{collections::BTreeSet, sync::Arc};
+use anyhow::{Context, bail};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use clap::{Arg, ArgAction, command, value_parser};
 use core::{
@@ -26,6 +27,7 @@ use std::{
 use tracing::{Level, error, info, trace, warn};
 use tracing_subscriber::{self, EnvFilter};
 
+#[must_use]
 fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &ProcessState) -> bool {
   if process_state.dry_run {
     info!(
@@ -36,6 +38,7 @@ fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &Pro
     return true;
   }
 
+  // TODO: https://doc.rust-lang.org/std/fs/fn.set_times.html once it is stabilized.
   let file = std::fs::File::open(file_path);
   let file = match file {
     Ok(file) => file,
@@ -49,6 +52,7 @@ fn set_modified_time(file_path: &Path, date: &NaiveDateTime, process_state: &Pro
   file.set_modified(date_time.into()).is_ok()
 }
 
+#[must_use]
 fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
   let metadata = std::fs::metadata(file_path);
   let metadata = match metadata {
@@ -80,6 +84,7 @@ fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
   Some(modified_date_time.naive_utc())
 }
 
+#[must_use]
 fn pretty_duration(duration: Duration) -> String {
   let mut result = String::with_capacity(32);
   let secs = duration.as_secs();
@@ -157,7 +162,7 @@ fn pretty_duration(duration: Duration) -> String {
 struct ProcessState {
   excluded_files: BTreeSet<PathBuf>,
   skip_hidden_files: bool,
-  exit_flag: AtomicBool,
+  should_exit: AtomicBool,
   start_time: NaiveDateTime,
   dry_run: bool,
   modified_times_future_threshold: NaiveDateTime,
@@ -187,7 +192,7 @@ impl ProcessState {
     Self {
       excluded_files,
       skip_hidden_files,
-      exit_flag: AtomicBool::new(true),
+      should_exit: AtomicBool::new(false),
       start_time: Local::now().naive_utc(),
       dry_run,
       modified_times_future_threshold,
@@ -245,11 +250,11 @@ impl ProcessState {
 }
 
 fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
-  if !process_state.exit_flag.load(Ordering::Relaxed) {
+  if process_state.should_exit.load(Ordering::Relaxed) {
     return;
   }
 
-  if process_state.excluded_files.contains(root_dir) {
+  if is_excluded(root_dir, &process_state.excluded_files) {
     process_state
       .stat_folders_skipped
       .fetch_add(1, Ordering::Relaxed);
@@ -269,7 +274,7 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
       .process_read_dir(move |_depth, _path, _read_dir_state, children| {
         // Filter out excluded directories
         for child in children.iter_mut().flatten() {
-          if process_state.excluded_files.contains(&child.path()) {
+          if is_excluded(&child.path(), &process_state.excluded_files) {
             child.read_children_path = None;
             process_state
               .stat_folders_skipped
@@ -281,11 +286,15 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
   };
 
   let _ = entries.par_bridge().try_for_each(|entry_result| {
+    if process_state.should_exit.load(Ordering::Relaxed) {
+      return Err(());
+    }
+
     let entry = match entry_result {
       Ok(entry) => entry,
       Err(e) => {
         error!(
-          "\"{}\": Failed to read entry: {}",
+          "\"{}\": Failed to read file entry: {}",
           e.path().map_or_else(
             || "Unknown path".to_string(),
             |path_option| path_option.display().to_string(),
@@ -299,30 +308,38 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
       },
     };
 
-    if !process_state.exit_flag.load(Ordering::Relaxed) {
-      return Err(());
-    }
-
     let path = entry.path();
-    if process_state.excluded_files.contains(&path) {
+    if is_excluded(&path, &process_state.excluded_files) {
       process_state
         .stat_files_skipped
         .fetch_add(1, Ordering::Relaxed);
       return Ok(());
     }
 
-    if entry.file_type().is_dir() {
+    let file_type = entry.file_type();
+    if file_type.is_dir()
+    // Always process the root directory even if it is a symlink.
+    || path == root_dir
+    {
       process_state
         .stat_folders_processed
         .fetch_add(1, Ordering::Relaxed);
       trace!("\"{}\": Processing directory", path.display());
-    } else if entry.file_type().is_file() {
+    } else if file_type.is_file() {
       process_file(&path, process_state);
     } else {
       process_state
         .stat_files_skipped
         .fetch_add(1, Ordering::Relaxed);
-      warn!("\"{}\": Skipping non-file entry", path.display());
+      if file_type.is_symlink() {
+        warn!("\"{}\": Skipping symbolic link", path.display());
+      } else {
+        warn!(
+          "\"{}\": Skipping non-file entry: {:#?}",
+          path.display(),
+          file_type
+        );
+      }
     }
 
     Ok(())
@@ -334,6 +351,7 @@ const OLD_MODIFIED_TIME_THRESHOLD: NaiveDateTime = NaiveDateTime::new(
   NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
 );
 
+#[must_use]
 fn get_confidence_of_naive(naive: &NaiveDateTime) -> DateConfidence {
   if *naive == OLD_MODIFIED_TIME_THRESHOLD {
     return DateConfidence::None;
@@ -357,6 +375,11 @@ fn get_confidence_of_naive(naive: &NaiveDateTime) -> DateConfidence {
     return DateConfidence::Year;
   }
   DateConfidence::Decade
+}
+
+#[must_use]
+fn is_excluded(path: &Path, excluded: &BTreeSet<PathBuf>) -> bool {
+  path.ancestors().any(|ancestor| excluded.contains(ancestor))
 }
 
 macro_rules! dyn_event {
@@ -413,12 +436,21 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
   // check that exif tool can work with this file type
   if file_extension.is_some_and(|ext| exif_tool_writable_file_extensions().contains(&ext)) {
     // guess the date from the file path
-    let file_name = file_path.file_name().unwrap().to_str().unwrap();
+    let file_name = file_path
+      .file_name()
+      .expect("File name should be present")
+      .to_string_lossy();
     guessed_date =
-      get_date_for_file(file_path, file_name, process_state.start_time).or_else(|| {
-        let folder_path = file_path.parent().unwrap();
-        let folder_name = folder_path.file_name().unwrap().to_str().unwrap();
-        get_date_for_file(folder_path, folder_name, process_state.start_time)
+      get_date_for_file(file_path, &file_name, process_state.start_time).or_else(|| {
+        let folder_path = match file_path.parent() {
+          Some(parent) => parent,
+          None => return None,
+        };
+        let folder_name = folder_path
+          .file_name()
+          .expect("Folder name should be present")
+          .to_string_lossy();
+        get_date_for_file(folder_path, &folder_name, process_state.start_time)
       });
 
     if let Some(guessed_date) = guessed_date {
@@ -554,12 +586,20 @@ fn process_file(file_path: &Path, process_state: &ProcessState) {
   }
 }
 
+#[must_use]
 fn new_argparser() -> clap::Command {
   command!()
   .about("Extracts possible timestamp information from filenames and sets EXIF and modified times accordingly.")
   .arg(
-    Arg::new("files")
+    Arg::new("flagged_files")
     .long("files")
+    .help("Files or directories to process")
+    .num_args(1..)
+    .value_name("FILES")
+    .value_parser(value_parser!(PathBuf)),
+  )
+  .arg(
+    Arg::new("positional_files")
     .help("Files or directories to process")
     .num_args(1..)
     .value_name("FILES")
@@ -623,15 +663,42 @@ fn new_argparser() -> clap::Command {
   )
 }
 
-fn main() -> Result<(), io::Error> {
+fn main() -> anyhow::Result<()> {
   let matches = new_argparser().get_matches();
 
-  let files = matches.get_many::<PathBuf>("files").unwrap_or_default();
-  let excluded_files = matches
+  let flagged_files = matches
+    .get_many::<PathBuf>("flagged_files")
+    .unwrap_or_default();
+  let positonal_files = matches
+    .get_many::<PathBuf>("positional_files")
+    .unwrap_or_default();
+  let files = flagged_files.chain(positonal_files);
+
+  let excluded_files_denorm = matches
     .get_many::<PathBuf>("exclude-files")
-    .unwrap_or_default()
-    .cloned()
-    .collect();
+    .unwrap_or_default();
+
+  // normalize the excluded files by converting them to absolute paths
+  let mut excluded_files = BTreeSet::new();
+  for path in excluded_files_denorm {
+    // The excluded file might not exist so we use absolute instead.
+    let absolute_path = std::path::absolute(path).context(format!(
+      "\"{}\": Failed to get absolute path for excluded file",
+      path.display()
+    ))?;
+
+    // verify that the absolute path does not contain any components that are "..", as this could cause issues
+    if absolute_path
+      .components()
+      .any(|component| component.as_os_str() == "..")
+    {
+      bail!(
+        "\"{}\": Excluded file path must not contain any '..' components",
+        path.display()
+      );
+    }
+    excluded_files.insert(absolute_path);
+  }
 
   // set the correct log level
   let log_level = matches
@@ -719,8 +786,8 @@ fn main() -> Result<(), io::Error> {
   ctrlc::set_handler(move || {
     println!("\nReceived Ctrl+C! Exiting...");
     ctrlc_process_state
-      .exit_flag
-      .store(false, Ordering::Relaxed);
+      .should_exit
+      .store(true, Ordering::Relaxed);
   })
   .expect("Error setting Ctrl+C handler");
 
@@ -729,6 +796,12 @@ fn main() -> Result<(), io::Error> {
     if file.is_dir() {
       process_dir_recursive(file, &process_state);
     } else {
+      if is_excluded(&file, &process_state.excluded_files) {
+        process_state
+          .stat_files_skipped
+          .fetch_add(1, Ordering::Relaxed);
+        return;
+      }
       process_file(file, &process_state);
     }
   });

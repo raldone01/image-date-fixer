@@ -100,6 +100,7 @@ ctrlc = "3.4"
 regex = "1.11"
 ariadne = { version = "0.6", features = ["auto-color"] }
 nom = "8.0"
+anyhow = "1.0"
 
 [lints]
 workspace = true
