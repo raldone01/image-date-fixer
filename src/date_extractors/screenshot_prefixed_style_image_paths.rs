@@ -1,7 +1,9 @@
-use super::{ConfidentNaiveDateTime, get_date_for_file};
+use std::{path::Path, sync::LazyLock};
+
 use chrono::NaiveDateTime;
 use regex::Regex;
-use std::{path::Path, sync::LazyLock};
+
+use super::{ConfidentNaiveDateTime, get_date_for_file};
 
 /// Extracts the date from screenshot prefixed image file paths.
 /// Example file paths:

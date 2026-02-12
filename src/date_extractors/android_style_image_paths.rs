@@ -1,4 +1,6 @@
-use super::{ChumError, ConfidentNaiveDateTime, DateConfidence};
+use core::str::FromStr as _;
+use std::{path::Path, sync::LazyLock};
+
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use chumsky::{
   extra::ParserExtra,
@@ -7,10 +9,10 @@ use chumsky::{
   text::{Char, TextExpected},
   util::MaybeRef,
 };
-use core::str::FromStr as _;
 use nom::IResult;
 use regex::Regex;
-use std::{path::Path, sync::LazyLock};
+
+use super::{ChumError, ConfidentNaiveDateTime, DateConfidence};
 
 /// Extracts the date from Android-style image file paths.
 /// Example file paths:

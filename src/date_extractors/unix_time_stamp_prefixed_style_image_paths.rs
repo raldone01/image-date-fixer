@@ -1,7 +1,9 @@
-use super::{ConfidentNaiveDateTime, DateConfidence};
+use std::{path::Path, sync::LazyLock};
+
 use chrono::DateTime;
 use regex::Regex;
-use std::{path::Path, sync::LazyLock};
+
+use super::{ConfidentNaiveDateTime, DateConfidence};
 
 /// Extracts the date from unix timestamp prefixed image file paths.
 /// Example file paths:

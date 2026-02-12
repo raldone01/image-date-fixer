@@ -9,9 +9,9 @@ use std::{
 
 use anyhow::Context as _;
 use chrono::NaiveDateTime;
-use tracing::{error, info};
+use tracing::info;
 
-use crate::tie_command_to_self::tie_command_to_self;
+use crate::{errors::ErrorWithFilePath, tie_command_to_self::tie_command_to_self};
 
 thread_local! {
   static EXIFTOOL: RefCell<RespawningExifToolWorker> = const { RefCell::new(RespawningExifToolWorker::new()) };
@@ -82,6 +82,16 @@ impl ExifToolWorker {
     }
     Ok(output.trim().to_string())
   }
+
+  /// Check if the exiftool process is still running.
+  #[must_use]
+  fn is_running(&mut self) -> bool {
+    match self.process.try_wait() {
+      Ok(Some(_)) => false,
+      Ok(None) => true,
+      Err(_) => false,
+    }
+  }
 }
 
 impl Drop for ExifToolWorker {
@@ -110,14 +120,12 @@ impl RespawningExifToolWorker {
       Some(worker) => worker,
       None => ExifToolWorker::new()?,
     };
-    match exif_tool_worker.execute(args) {
-      Ok(output) => {
-        // Put the worker back into the cache for future use
-        self.cached_worker = Some(exif_tool_worker);
-        Ok(output)
-      },
-      Err(e) => Err(e),
+    let execute_result = exif_tool_worker.execute(args);
+    // Only put the worker back into the cache if the error was not due to the process exiting unexpectedly
+    if exif_tool_worker.is_running() {
+      self.cached_worker = Some(exif_tool_worker);
     }
+    execute_result
   }
 }
 
@@ -133,9 +141,9 @@ pub fn has_exiftool() -> bool {
 }
 
 pub fn get_exif_date(
-  file: &Path,
+  file_path: &Path,
   ignore_minor_exif_errors: bool,
-) -> anyhow::Result<Option<NaiveDateTime>> {
+) -> Result<Option<NaiveDateTime>, ErrorWithFilePath> {
   EXIFTOOL.with_borrow_mut(|et| {
     let mut args = Vec::new();
     if ignore_minor_exif_errors {
@@ -145,32 +153,39 @@ pub fn get_exif_date(
     args.push(Cow::Borrowed("-d"));
     args.push(Cow::Borrowed("%Y-%m-%d %H:%M:%S"));
     args.push(Cow::Borrowed("-s3"));
-    args.push(file.to_string_lossy());
+    args.push(file_path.to_string_lossy());
 
-    let date_str = et.execute(args)?;
+    let date_str = et
+      .execute(args)
+      .context("Failed to execute exiftool to get EXIF date")
+      .map_err(ErrorWithFilePath::from_source(file_path))?;
 
     if date_str.is_empty() {
       return Ok(None);
     }
 
     let date_str = date_str.trim();
-    Ok(NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S").ok())
+    Ok(Some(
+      NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
+        .context("Failed to parse the EXIF date returned by exiftool")
+        .map_err(ErrorWithFilePath::from_source(file_path))?,
+    ))
   })
 }
 
 pub fn set_exif_date(
-  file: &Path,
+  file_path: &Path,
   date: &NaiveDateTime,
   dry_run: bool,
   ignore_minor_exif_errors: bool,
-) -> anyhow::Result<bool> {
+) -> Result<(), ErrorWithFilePath> {
   if dry_run {
     info!(
-      "\"{}\": Would set EXIF date to {}",
-      file.display(),
-      date.format("%Y-%m-%d %H:%M:%S")
+      file_path = %file_path.display(),
+      "Would set EXIF date to {}",
+      date.format("%Y-%m-%d %H:%M:%S"),
     );
-    return Ok(true);
+    return Ok(());
   }
 
   let date_str = date.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -182,26 +197,93 @@ pub fn set_exif_date(
     }
     args.push(Cow::Borrowed("-overwrite_original"));
     args.push(Cow::Owned(format!("-DateTimeOriginal={date_str}")));
-    args.push(file.to_string_lossy());
+    args.push(file_path.to_string_lossy());
 
-    let output = et.execute(args)?;
+    let output = et
+      .execute(args)
+      .context("Failed to execute exiftool to set EXIF date")
+      .map_err(ErrorWithFilePath::from_source(file_path))?;
 
-    Ok(if output.contains("1 image files updated") {
-      true
+    if output.contains("1 image files updated") {
+      Ok(())
     } else {
-      error!(
-        "\"{}\": Failed to set EXIF date to {date_str}. exiftool output: {output}",
-        file.display(),
-      );
-      false
-    })
+      Err(ErrorWithFilePath::new(
+        file_path,
+        anyhow::anyhow!("Failed to set EXIF date to {date_str}. exiftool output: {output}"),
+      ))
+    }
   })
+}
+
+pub fn repair_exif_errors(file_path: &Path, dry_run: bool) -> Result<(), ErrorWithFilePath> {
+  if dry_run {
+    info!(
+      file_path = %file_path.display(),
+      "Would attempt to repair EXIF errors",
+    );
+    return Ok(());
+  }
+
+  EXIFTOOL.with_borrow_mut(|et| {
+    let args = [
+      Cow::Borrowed("-m"),
+      Cow::Borrowed("-overwrite_original"),
+      Cow::Borrowed("-exif:all="),
+      Cow::Borrowed("-tagsfromfile"),
+      Cow::Borrowed("@"),
+      Cow::Borrowed("-all:all"),
+      Cow::Borrowed("-unsafe"),
+      Cow::Borrowed("-icc_profile"),
+      file_path.to_string_lossy(),
+    ];
+
+    let output = et
+      .execute(args)
+      .context("Failed to execute exiftool to repair EXIF errors")
+      .map_err(ErrorWithFilePath::from_source(file_path))?;
+
+    if output.contains("1 image files updated") {
+      info!(
+        file_path = %file_path.display(),
+        "Successfully repaired EXIF errors",
+      );
+      Ok(())
+    } else {
+      Err(ErrorWithFilePath::new(
+        file_path,
+        anyhow::anyhow!("Failed to repair EXIF errors. exiftool output: {output}"),
+      ))
+    }
+  })
+}
+
+pub fn wrap_with_exiftool_repair<R>(
+  file_path: &Path,
+  repair_exif_errors: bool,
+  dry_run: bool,
+  closure: impl Fn() -> Result<R, ErrorWithFilePath>,
+) -> Result<R, ErrorWithFilePath> {
+  let closure_result = closure();
+
+  if !repair_exif_errors {
+    return closure_result;
+  }
+
+  match closure_result {
+    Ok(result) => Ok(result),
+    Err(mut e) => {
+      e = e.context("Operation failed, and repair_exif_errors is enabled, attempting to repair EXIF errors and retry...");
+      e.log_error();
+      self::repair_exif_errors(file_path, dry_run)?;
+      closure().map_err(|e| e.context("Operation still failed after repairing EXIF errors"))
+    },
+  }
 }
 
 fn exif_tool_writable_file_extensions_internal() -> anyhow::Result<BTreeSet<String>> {
   // run exiftool to get the list of writable file extensions
   EXIFTOOL.with_borrow_mut(|et| {
-    let output_str = et.execute(vec!["-listwf".to_string()])?;
+    let output_str = et.execute(["-listwf"])?;
     let mut extensions = BTreeSet::new();
     for line_str in output_str.lines() {
       if line_str.starts_with("Writable file extensions:") {

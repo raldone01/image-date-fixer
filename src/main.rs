@@ -3,29 +3,37 @@
 extern crate alloc;
 
 mod date_extractors;
+mod errors;
 mod exiftool;
+mod logging;
 mod pretty_duration;
 mod tie_command_to_self;
 
 use alloc::{collections::BTreeSet, sync::Arc};
-use anyhow::{Context as _, bail};
-use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use clap::{Arg, ArgAction, command, value_parser};
 use core::{
   str::FromStr as _,
   sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
-use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
-use jwalk::WalkDir;
-use rayon::prelude::*;
 use std::{
   io::{self, Write as _},
   path::{Path, PathBuf},
   process::exit,
 };
+
+use anyhow::{Context as _, bail};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use clap::{Arg, ArgAction, command, value_parser};
+use jwalk::WalkDir;
+use rayon::prelude::*;
 use tracing::{Level, error, info, trace, warn};
-use tracing_subscriber::{self, EnvFilter};
+
+use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
+use exiftool::{
+  exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date,
+  wrap_with_exiftool_repair,
+};
+
+use crate::{errors::ErrorWithFilePath, logging::setup_logging};
 
 fn set_modified_time(
   file_path: &Path,
@@ -34,9 +42,9 @@ fn set_modified_time(
 ) -> anyhow::Result<()> {
   if process_state.dry_run {
     info!(
-      "\"{}\": Would set modified time to {}",
-      file_path.display(),
-      date.format("%Y-%m-%d %H:%M:%S")
+      file_path = %file_path.display(),
+      "Would set modified time to {}",
+      date.format("%Y-%m-%d %H:%M:%S"),
     );
     return Ok(());
   }
@@ -62,35 +70,16 @@ fn set_modified_time(
 }
 
 #[must_use]
-fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
-  let metadata = std::fs::metadata(file_path);
-  let metadata = match metadata {
-    Ok(metadata) => metadata,
-    Err(e) => {
-      error!(
-        "\"{}\": Failed to get metadata for file: {}",
-        file_path.display(),
-        e
-      );
-      return None;
-    },
-  };
+fn get_modified_time(file_path: &Path) -> Result<NaiveDateTime, ErrorWithFilePath> {
+  let metadata = std::fs::metadata(file_path)
+    .map_err(|e| ErrorWithFilePath::new(file_path, e).context("Failed to get metadata for file"))?;
 
-  let modified_time = metadata.modified();
-  let modified_time = match modified_time {
-    Ok(modified_time) => modified_time,
-    Err(e) => {
-      error!(
-        "\"{}\": Failed to get modified time for file: {}",
-        file_path.display(),
-        e
-      );
-      return None;
-    },
-  };
+  let modified_time = metadata.modified().map_err(|e| {
+    ErrorWithFilePath::new(file_path, e).context("Failed to get modified time for file")
+  })?;
 
   let modified_date_time = DateTime::<Utc>::from(modified_time);
-  Some(modified_date_time.naive_utc())
+  Ok(modified_date_time.naive_utc())
 }
 
 struct ProcessState {
@@ -102,6 +91,7 @@ struct ProcessState {
   modified_times_future_threshold: NaiveDateTime,
   exif_dates_future_threshold: NaiveDateTime,
   ignore_minor_exif_errors: bool,
+  repair_exif_errors: bool,
 
   stat_folders_processed: AtomicUsize,
   stat_folders_skipped: AtomicUsize,
@@ -122,6 +112,7 @@ impl ProcessState {
     modified_times_future_threshold: NaiveDateTime,
     exif_dates_future_threshold: NaiveDateTime,
     ignore_minor_exif_errors: bool,
+    repair_exif_errors: bool,
   ) -> Self {
     Self {
       excluded_files,
@@ -132,6 +123,7 @@ impl ProcessState {
       modified_times_future_threshold,
       exif_dates_future_threshold,
       ignore_minor_exif_errors,
+      repair_exif_errors,
 
       stat_folders_processed: AtomicUsize::new(0),
       stat_folders_skipped: AtomicUsize::new(0),
@@ -199,7 +191,10 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     .stat_folders_processed
     .fetch_add(1, Ordering::Relaxed);
 
-  info!("\"{}\": Processing top level directory", root_dir.display());
+  info!(
+    file_path = %root_dir.display(),
+    "Processing top level directory",
+  );
 
   let entries = {
     let process_state = process_state.clone();
@@ -227,13 +222,14 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     let entry = match entry_result {
       Ok(entry) => entry,
       Err(e) => {
+        let file_path = e.path().map_or_else(
+          || "Unknown path".to_string(),
+          |path_option| path_option.display().to_string(),
+        );
         error!(
-          "\"{}\": Failed to read file entry: {}",
-          e.path().map_or_else(
-            || "Unknown path".to_string(),
-            |path_option| path_option.display().to_string(),
-          ),
-          e
+          file_path = %file_path,
+          source = %e,
+          "Failed to read file entry while processing directory",
         );
         process_state
           .stat_files_errors
@@ -258,7 +254,10 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
       process_state
         .stat_folders_processed
         .fetch_add(1, Ordering::Relaxed);
-      trace!("\"{}\": Processing directory", path.display());
+      trace!(
+        file_path = %path.display(),
+        "Processing directory",
+      );
     } else if file_type.is_file() {
       process_file(&path, process_state);
     } else {
@@ -266,12 +265,15 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
         .stat_files_skipped
         .fetch_add(1, Ordering::Relaxed);
       if file_type.is_symlink() {
-        warn!("\"{}\": Skipping symbolic link", path.display());
+        warn!(
+          file_path = %path.display(),
+          "Skipping symbolic link",
+        );
       } else {
         warn!(
-          "\"{}\": Skipping non-file entry: {:#?}",
-          path.display(),
-          file_type
+          file_path = %path.display(),
+          "Skipping non-file entry: {:#?}",
+          file_type,
         );
       }
     }
@@ -329,24 +331,43 @@ macro_rules! dyn_event {
 }
 
 fn process_file(file_path: &Path, process_state: &Arc<ProcessState>) {
-  if let Err(e) = process_file_internal(file_path, process_state) {
-    error!("\"{}\": Failed to process file: {}", file_path.display(), e);
+  trace!(
+    file_path = %file_path.display(),
+    "Processing file",
+  );
+  process_state
+    .stat_files_processed
+    .fetch_add(1, Ordering::Relaxed);
+  if let Err(errors) = process_file_internal(file_path, process_state) {
+    error!(
+        file_path = %file_path.display(),
+        error_count = errors.len(),
+        errors = ?errors,
+        "Failed to process file",
+    );
+
     process_state
       .stat_files_errors
       .fetch_add(1, Ordering::Relaxed);
   }
 }
 
-fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyhow::Result<()> {
-  trace!("\"{}\": Processing file", file_path.display());
-  process_state
-    .stat_files_processed
-    .fetch_add(1, Ordering::Relaxed);
+fn process_file_internal(
+  file_path: &Path,
+  process_state: &ProcessState,
+) -> Result<(), Vec<ErrorWithFilePath>> {
+  let mut errors = Vec::<ErrorWithFilePath>::new();
 
   let mut new_file_modified_time = None;
   let mut new_exif_date = None;
 
-  let original_file_modified_time = get_modified_time(file_path);
+  let original_file_modified_time = match get_modified_time(file_path) {
+    Ok(modified_time) => Some(modified_time),
+    Err(e) => {
+      errors.push(e);
+      None
+    },
+  };
   let mut original_exif_date = None;
   let mut guessed_date = None;
 
@@ -354,18 +375,18 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
     // check if the original modified time is in the future
     if original_file_modified_time > process_state.modified_times_future_threshold {
       info!(
-        "\"{}\": File has a modified time in the future: {}.",
-        file_path.display(),
-        original_file_modified_time.format("%Y-%m-%d %H:%M:%S")
+        file_path = %file_path.display(),
+        "File has a modified time in the future: {}",
+        original_file_modified_time.format("%Y-%m-%d %H:%M:%S"),
       );
       new_file_modified_time = Some(process_state.start_time);
     }
     // check if the original modified time is before 1970-01-02
     else if original_file_modified_time < OLD_MODIFIED_TIME_THRESHOLD {
       info!(
-        "\"{}\": File has a modified time before 1970-01-02: {}.",
-        file_path.display(),
-        original_file_modified_time.format("%Y-%m-%d %H:%M:%S")
+        file_path = %file_path.display(),
+        "File has a modified time before 1970-01-02: {}.",
+        original_file_modified_time.format("%Y-%m-%d %H:%M:%S"),
       );
       new_file_modified_time = Some(OLD_MODIFIED_TIME_THRESHOLD);
     }
@@ -377,7 +398,13 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
     .map(str::to_ascii_uppercase);
 
   // check that exif tool can work with this file type
-  let exif_tool_writable_file_extensions = exif_tool_writable_file_extensions()?;
+  let exif_tool_writable_file_extensions = match exif_tool_writable_file_extensions() {
+    Ok(exts) => exts,
+    Err(e) => {
+      errors.push(ErrorWithFilePath::new(file_path, e));
+      return Err(errors);
+    },
+  };
   if file_extension.is_some_and(|ext| exif_tool_writable_file_extensions.contains(&ext)) {
     // guess the date from the file path
     let file_name = file_path
@@ -396,26 +423,41 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
 
     if let Some(guessed_date) = guessed_date {
       trace!(
-        "\"{}\": Guessed date from file name: {} (confidence: {:?})",
-        file_path.display(),
+        file_path = %file_path.display(),
+        "Guessed date from file name: {} (confidence: {:?})",
         guessed_date.date.format("%Y-%m-%d %H:%M:%S"),
-        guessed_date.confidence
+        guessed_date.confidence,
       );
     }
 
     // get the original exif date and its confidence
-    original_exif_date =
-      get_exif_date(file_path, process_state.ignore_minor_exif_errors)?.map(|date| {
-        let confidence = get_confidence_of_naive(&date);
-        ConfidentNaiveDateTime::new(date, confidence)
-      });
+    let get_exif_date_result = wrap_with_exiftool_repair(
+      file_path,
+      process_state.repair_exif_errors,
+      process_state.dry_run,
+      || get_exif_date(file_path, process_state.ignore_minor_exif_errors),
+    );
+    original_exif_date = match get_exif_date_result {
+      // successfully got an exif date
+      Ok(Some(date)) => Some(ConfidentNaiveDateTime::new(
+        date,
+        get_confidence_of_naive(&date),
+      )),
+      // The file has no EXIF date set.
+      Ok(None) => None,
+      Err(e) => {
+        // Failed to get EXIF date, likely due to EXIF errors.
+        errors.push(e);
+        None
+      },
+    };
 
     if let Some(original_exif_date) = original_exif_date {
       trace!(
-        "\"{}\": Original EXIF date: {} (confidence: {:?})",
-        file_path.display(),
+        file_path = %file_path.display(),
+        "Original EXIF date: {} (confidence: {:?})",
         original_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
-        original_exif_date.confidence
+        original_exif_date.confidence,
       );
     }
   }
@@ -425,9 +467,9 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
     && original_exif_date.date > process_state.exif_dates_future_threshold
   {
     info!(
-      "\"{}\": File has an EXIF date in the future: {}. Setting it to the current time.",
-      file_path.display(),
-      original_exif_date
+      file_path = %file_path.display(),
+      "File has an EXIF date in the future: {}. Setting it to the current time.",
+      original_exif_date,
     );
     new_exif_date = Some(ConfidentNaiveDateTime::new(
       process_state.start_time,
@@ -449,9 +491,8 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
   if original_exif_date.is_none() && new_exif_date.is_none() && guessed_date.is_none() {
     let digit_count_in_file_name = file_path
       .file_name()
-      .unwrap()
-      .to_str()
-      .unwrap()
+      .expect("File name should be present")
+      .to_string_lossy()
       .chars()
       .filter(char::is_ascii_digit)
       .count();
@@ -462,8 +503,8 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
     };
     dyn_event!(
       log_level,
-      "\"{}\": The file does not have an existing EXIF date, and no date could be guessed from the file name.",
-      file_path.display()
+      file_path = %file_path.display(),
+      "The file does not have an existing EXIF date, and no date could be guessed from the file name."
     );
   }
 
@@ -471,56 +512,81 @@ fn process_file_internal(file_path: &Path, process_state: &ProcessState) -> anyh
   if let Some(new_exif_date) = new_exif_date {
     if let Some(original_exif_date) = original_exif_date {
       info!(
-        "\"{}\": Overwriting EXIF date {} (confidence: {:?}) with new EXIF date {} (confidence: {:?})",
-        file_path.display(),
+        file_path = %file_path.display(),
+        "Overwriting EXIF date {} (confidence: {:?}) with new EXIF date {} (confidence: {:?})",
         original_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
         original_exif_date.confidence,
         new_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
-        new_exif_date.confidence
+        new_exif_date.confidence,
       );
     } else {
       info!(
-        "\"{}\": Setting EXIF date to new EXIF date {} (confidence: {:?})",
-        file_path.display(),
+        file_path = %file_path.display(),
+        "Setting EXIF date to new EXIF date {} (confidence: {:?})",
         new_exif_date.date.format("%Y-%m-%d %H:%M:%S"),
-        new_exif_date.confidence
+        new_exif_date.confidence,
       );
     }
 
     // write the new exif date
-    if set_exif_date(
+    let set_exif_date_result = wrap_with_exiftool_repair(
       file_path,
-      &new_exif_date.date,
+      process_state.repair_exif_errors,
       process_state.dry_run,
-      process_state.ignore_minor_exif_errors,
-    )? {
-      // update the statistics
+      || {
+        set_exif_date(
+          file_path,
+          &new_exif_date.date,
+          process_state.dry_run,
+          process_state.ignore_minor_exif_errors,
+        )
+      },
+    )
+    .with_context(|| {
       if original_exif_date.is_some() {
-        process_state
-          .stat_exif_overwritten
-          .fetch_add(1, Ordering::Relaxed);
+        format!(
+          "Failed to overwrite EXIF date {} with new EXIF date {}",
+          original_exif_date.unwrap(),
+          new_exif_date
+        )
       } else {
-        process_state
-          .stat_exif_updated
-          .fetch_add(1, Ordering::Relaxed);
+        format!("Failed to set EXIF date to new EXIF date {}", new_exif_date)
       }
-    } else {
-      error!("\"{}\": Failed to set EXIF date", file_path.display());
-      process_state
-        .stat_files_errors
-        .fetch_add(1, Ordering::Relaxed);
+    });
+    match set_exif_date_result {
+      // update the statistics
+      Ok(_) => {
+        if original_exif_date.is_some() {
+          process_state
+            .stat_exif_overwritten
+            .fetch_add(1, Ordering::Relaxed);
+        } else {
+          process_state
+            .stat_exif_updated
+            .fetch_add(1, Ordering::Relaxed);
+        }
+      },
+      Err(e) => {
+        errors.push(ErrorWithFilePath::new(file_path, e));
+      },
     }
   }
 
   // overwrite the modified time
   if let Some(new_file_modified_time) = new_file_modified_time {
-    set_modified_time(file_path, &new_file_modified_time, process_state)?;
+    if let Err(e) = set_modified_time(file_path, &new_file_modified_time, process_state) {
+      errors.push(ErrorWithFilePath::new(file_path, e));
+    }
     process_state
       .stat_modified_time_updated
       .fetch_add(1, Ordering::Relaxed);
   }
 
-  Ok(())
+  if errors.is_empty() {
+    Ok(())
+  } else {
+    Err(errors)
+  }
 }
 
 #[must_use]
@@ -598,10 +664,22 @@ fn new_argparser() -> clap::Command {
     .help("Ignore minor EXIF errors")
     .action(ArgAction::SetTrue),
   )
+  .arg(
+    Arg::new("repair-exif-errors")
+    .long("repair-exif-errors")
+    .help("Repair EXIF errors")
+    .action(ArgAction::SetTrue),
+  )
 }
 
 fn main() -> anyhow::Result<()> {
   let matches = new_argparser().get_matches();
+
+  // set the correct log level
+  let log_level = matches
+    .get_one::<String>("log-level")
+    .and_then(|level| Level::from_str(level).ok());
+  setup_logging(log_level);
 
   let flagged_files = matches
     .get_many::<PathBuf>("flagged_files")
@@ -635,19 +713,6 @@ fn main() -> anyhow::Result<()> {
       );
     }
     excluded_files.insert(absolute_path);
-  }
-
-  // set the correct log level
-  let log_level = matches
-    .get_one::<String>("log-level")
-    .and_then(|level| Level::from_str(level).ok());
-  let logging_builder = tracing_subscriber::fmt::fmt().with_writer(io::stdout);
-  if let Some(level) = log_level {
-    logging_builder.with_max_level(level).init();
-  } else {
-    logging_builder
-      .with_env_filter(EnvFilter::from_default_env())
-      .init();
   }
 
   if !has_exiftool() {
@@ -691,6 +756,10 @@ fn main() -> anyhow::Result<()> {
     .get_one::<bool>("ignore-minor-exif-errors")
     .copied()
     .unwrap_or(false);
+  let repair_exif_errors = matches
+    .get_one::<bool>("repair-exif-errors")
+    .copied()
+    .unwrap_or(false);
 
   if print_supported_file_extensions {
     // Acquire a lock on standard output for buffered writing
@@ -717,6 +786,7 @@ fn main() -> anyhow::Result<()> {
     modified_times_future_threshold,
     exif_dates_future_threshold,
     ignore_minor_exif_errors,
+    repair_exif_errors,
   ));
 
   let ctrlc_process_state = process_state.clone();
