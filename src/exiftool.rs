@@ -12,7 +12,7 @@ use chrono::NaiveDateTime;
 use tracing::{error, info};
 
 thread_local! {
-  static EXIFTOOL: RefCell<Option<ExifToolWorker>> = const { RefCell::new(None) };
+  static EXIFTOOL: RefCell<Option<RespawningExifToolWorker>> = const { RefCell::new(None) };
 }
 
 struct ExifToolWorker {
@@ -49,6 +49,7 @@ impl ExifToolWorker {
       .stdin
       .as_mut()
       .context("Failed to capture stdin")?;
+
     for arg in args {
       writeln!(stdin, "{}", arg.as_ref()).context("Failed to write args to exiftool")?;
     }
@@ -56,11 +57,19 @@ impl ExifToolWorker {
 
     let mut output = String::new();
     let mut line = String::new();
+
     loop {
       line.clear();
-      if self.reader.read_line(&mut line).unwrap_or(0) == 0 {
-        break;
+      let bytes_read = self
+        .reader
+        .read_line(&mut line)
+        .context("Failed to read from exiftool")?;
+      if bytes_read == 0 {
+        return Err(anyhow::anyhow!(
+          "ExifTool process exited unexpectedly (EOF)"
+        ));
       }
+
       if line.trim() == "{ready}" {
         break;
       }
@@ -79,6 +88,29 @@ impl Drop for ExifToolWorker {
   }
 }
 
+struct RespawningExifToolWorker {
+  worker: ExifToolWorker,
+}
+
+impl RespawningExifToolWorker {
+  fn new() -> anyhow::Result<Self> {
+    Ok(Self {
+      worker: ExifToolWorker::new()?,
+    })
+  }
+
+  fn execute(&mut self, args: impl IntoIterator<Item = impl AsRef<str>>) -> anyhow::Result<String> {
+    match self.worker.execute(args) {
+      Ok(output) => Ok(output),
+      Err(e) => {
+        error!("ExifTool execution failed: {}. Respawning exiftool...", e);
+        self.worker = ExifToolWorker::new()?;
+        Err(e)
+      },
+    }
+  }
+}
+
 #[must_use]
 pub fn has_exiftool() -> bool {
   Command::new("exiftool")
@@ -90,9 +122,12 @@ pub fn has_exiftool() -> bool {
     .unwrap_or(false)
 }
 
-fn get_exif_tool(et: &mut Option<ExifToolWorker>) -> anyhow::Result<&mut ExifToolWorker> {
+/// Gets a thread-local RespawningExifToolWorker, spawning it if it doesn't exist yet.
+fn get_exif_tool(
+  et: &mut Option<RespawningExifToolWorker>,
+) -> anyhow::Result<&mut RespawningExifToolWorker> {
   if et.is_none() {
-    *et = Some(ExifToolWorker::new()?);
+    *et = Some(RespawningExifToolWorker::new()?);
   }
   Ok(et.as_mut().unwrap())
 }
