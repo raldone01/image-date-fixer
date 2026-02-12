@@ -1,6 +1,9 @@
 use std::process::Command;
 
-pub fn tie_command_to_self(command: &mut Command) -> anyhow::Result<()> {
+/// In contrast to windows, Unix doesn't automatically kill child processes when the parent process dies.
+/// To ensure that child processes don't become zombies if the main process crashes,
+/// prctl is used to request that the child process receives a SIGTERM signal when the parent process dies.
+pub fn tie_command_to_self(command: &mut Command) {
   // Unix: Request SIGTERM if parent dies
   #[cfg(unix)]
   #[expect(
@@ -11,14 +14,11 @@ pub fn tie_command_to_self(command: &mut Command) -> anyhow::Result<()> {
     use std::os::unix::process::CommandExt as _;
 
     command.pre_exec(|| {
-      // PR_SET_PDEATHSIG = 1
-      let r = libc::prctl(1, libc::SIGTERM);
-      if r != 0 {
+      let r = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+      if r < 0 {
         return Err(std::io::Error::last_os_error());
       }
       Ok(())
     });
   }
-
-  Ok(())
 }
