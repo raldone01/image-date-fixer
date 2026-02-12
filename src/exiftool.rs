@@ -17,9 +17,15 @@ thread_local! {
   static EXIFTOOL: RefCell<RespawningExifToolWorker> = const { RefCell::new(RespawningExifToolWorker::new()) };
 }
 
+struct CommandOutput {
+  stdout: String,
+  stderr: String,
+}
+
 struct ExifToolWorker {
   process: Child,
-  reader: BufReader<std::process::ChildStdout>,
+  stdout_reader: BufReader<std::process::ChildStdout>,
+  stderr_reader: BufReader<std::process::ChildStderr>,
 }
 
 impl ExifToolWorker {
@@ -32,7 +38,7 @@ impl ExifToolWorker {
       .arg("-")
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
-      .stderr(Stdio::null());
+      .stderr(Stdio::piped());
 
     tie_command_to_self(&mut command);
 
@@ -42,31 +48,62 @@ impl ExifToolWorker {
       .stdout
       .take()
       .context("Failed to capture stdout of exiftool")?;
+
+    let stderr = process
+      .stderr
+      .take()
+      .context("Failed to capture stderr of exiftool")?;
+
     Ok(Self {
       process,
-      reader: BufReader::new(stdout),
+      stdout_reader: BufReader::new(stdout),
+      stderr_reader: BufReader::new(stderr),
     })
   }
 
-  fn execute(&mut self, args: impl IntoIterator<Item = impl AsRef<str>>) -> anyhow::Result<String> {
+  fn execute(&mut self, args: &[impl AsRef<str>]) -> anyhow::Result<CommandOutput> {
     let stdin = self
       .process
       .stdin
       .as_mut()
       .context("Failed to capture stdin")?;
 
+    tracing::trace!(
+      "exiftool {}",
+      args
+        .iter()
+        .map(|s| format!("\"{}\"", s.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ")
+    );
+
     for arg in args {
       writeln!(stdin, "{}", arg.as_ref()).context("Failed to write args to exiftool")?;
     }
     writeln!(stdin, "-execute").context("Failed to execute command")?;
 
-    let mut output = String::new();
-    let mut line = String::new();
+    let mut stderr_string = String::new();
+    while self
+      .stderr_reader
+      .fill_buf()
+      .context("Failed to read from from exiftool stderr")?
+      .is_empty()
+      == false
+    {
+      let mut line = String::new();
+      self
+        .stderr_reader
+        .read_line(&mut line)
+        .context("Failed to read from from exiftool stderr")?;
+      stderr_string.push_str(&line);
+    }
 
+    let mut stdout_string = String::new();
+    let mut line = String::new();
     loop {
       line.clear();
       let bytes_read = self
-        .reader
+        .stdout_reader
         .read_line(&mut line)
         .context("Failed to read from exiftool")?;
       if bytes_read == 0 {
@@ -78,9 +115,12 @@ impl ExifToolWorker {
       if line.trim() == "{ready}" {
         break;
       }
-      output.push_str(&line);
+      stdout_string.push_str(&line);
     }
-    Ok(output.trim().to_string())
+    Ok(CommandOutput {
+      stdout: stdout_string,
+      stderr: stderr_string,
+    })
   }
 
   /// Check if the exiftool process is still running.
@@ -114,15 +154,15 @@ impl RespawningExifToolWorker {
     }
   }
 
-  fn execute(&mut self, args: impl IntoIterator<Item = impl AsRef<str>>) -> anyhow::Result<String> {
-    let mut exif_tool_worker = match self.cached_worker.take() {
+  fn execute(&mut self, args: &[impl AsRef<str>]) -> anyhow::Result<CommandOutput> {
+    let mut exiftool_worker = match self.cached_worker.take() {
       Some(worker) => worker,
       None => ExifToolWorker::new()?,
     };
-    let execute_result = exif_tool_worker.execute(args);
+    let execute_result = exiftool_worker.execute(args);
     // Only put the worker back into the cache if the error was not due to the process exiting unexpectedly
-    if exif_tool_worker.is_running() {
-      self.cached_worker = Some(exif_tool_worker);
+    if exiftool_worker.is_running() {
+      self.cached_worker = Some(exiftool_worker);
     }
     execute_result
   }
@@ -151,21 +191,34 @@ pub fn get_exif_date(
     args.push(Cow::Borrowed("-d"));
     args.push(Cow::Borrowed("%Y-%m-%d %H:%M:%S"));
     args.push(Cow::Borrowed("-s3"));
+    if file_path.to_str().is_none() {
+      tracing::warn!(
+        file_path = %file_path.display(),
+        "File path is not valid UTF-8, exiftool may not be able to process it",
+      );
+    }
     args.push(file_path.to_string_lossy());
 
-    let date_str = et
-      .execute(args)
+    let exiftool_output = et
+      .execute(&args)
       .context("Failed to execute exiftool to get EXIF date")
       .map_err(ErrorWithFilePath::from_source(file_path))?;
+    let exiftool_stdout = exiftool_output.stdout.trim();
+    let exiftool_stderr = exiftool_output.stderr.trim();
 
-    if date_str.is_empty() {
+    if exiftool_stdout.is_empty() {
+      // If there is no DateTimeOriginal tag, exiftool returns an empty string.
       return Ok(None);
     }
 
-    let date_str = date_str.trim();
+    // On success the exiftool output is the date_str
     Ok(Some(
-      NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
-        .context("Failed to parse the EXIF date returned by exiftool")
+      NaiveDateTime::parse_from_str(exiftool_stdout, "%Y-%m-%d %H:%M:%S")
+        .with_context(|| {
+          format!(
+            "Failed to parse the EXIF date. exiftool stderr:\n{exiftool_stderr}\nstdout:\n{exiftool_stdout}"
+          )
+        })
         .map_err(ErrorWithFilePath::from_source(file_path))?,
     ))
   })
@@ -197,17 +250,21 @@ pub fn set_exif_date(
     args.push(Cow::Owned(format!("-DateTimeOriginal={date_str}")));
     args.push(file_path.to_string_lossy());
 
-    let output = et
-      .execute(args)
+    let exiftool_output = et
+      .execute(&args)
       .context("Failed to execute exiftool to set EXIF date")
       .map_err(ErrorWithFilePath::from_source(file_path))?;
+    let exiftool_stdout = exiftool_output.stdout.trim();
+    let exiftool_stderr = exiftool_output.stderr.trim();
 
-    if output.contains("1 image files updated") {
+    if exiftool_stdout.contains("1 image files updated") {
       Ok(())
     } else {
       Err(ErrorWithFilePath::new(
         file_path,
-        anyhow::anyhow!("Failed to set EXIF date to {date_str}. exiftool output: {output}"),
+        anyhow::anyhow!(
+          "Failed to set EXIF date to {date_str}. exiftool stderr:\n{exiftool_stderr}\nstdout:\n{exiftool_stdout}"
+        ),
       ))
     }
   })
@@ -235,12 +292,14 @@ pub fn repair_exif_errors(file_path: &Path, dry_run: bool) -> Result<(), ErrorWi
       file_path.to_string_lossy(),
     ];
 
-    let output = et
-      .execute(args)
+    let exiftool_output = et
+      .execute(&args)
       .context("Failed to execute exiftool to repair EXIF errors")
       .map_err(ErrorWithFilePath::from_source(file_path))?;
+    let exiftool_stdout = exiftool_output.stdout.trim();
+    let exiftool_stderr = exiftool_output.stderr.trim();
 
-    if output.contains("1 image files updated") {
+    if exiftool_stdout.contains("1 image files updated") {
       info!(
         file_path = %file_path.display(),
         "Successfully repaired EXIF errors",
@@ -249,7 +308,9 @@ pub fn repair_exif_errors(file_path: &Path, dry_run: bool) -> Result<(), ErrorWi
     } else {
       Err(ErrorWithFilePath::new(
         file_path,
-        anyhow::anyhow!("Failed to repair EXIF errors. exiftool output: {output}"),
+        anyhow::anyhow!(
+          "Failed to repair EXIF errors. exiftool stderr:\n{exiftool_stderr}\nstdout:\n{exiftool_stdout}"
+        ),
       ))
     }
   })
@@ -278,12 +339,14 @@ pub fn wrap_with_exiftool_repair<R>(
   }
 }
 
-fn exif_tool_writable_file_extensions_internal() -> anyhow::Result<BTreeSet<String>> {
+fn exiftool_writable_file_extensions_internal() -> anyhow::Result<BTreeSet<String>> {
   // run exiftool to get the list of writable file extensions
   EXIFTOOL.with_borrow_mut(|et| {
-    let output_str = et.execute(["-listwf"])?;
+    let exiftool_output = et.execute(&["-listwf"])?;
+    let exiftool_stdout = exiftool_output.stdout.trim();
+
     let mut extensions = BTreeSet::new();
-    for line_str in output_str.lines() {
+    for line_str in exiftool_stdout.lines() {
       if line_str.starts_with("Writable file extensions:") {
         continue;
       }
@@ -298,17 +361,17 @@ fn exif_tool_writable_file_extensions_internal() -> anyhow::Result<BTreeSet<Stri
   })
 }
 
-pub fn exif_tool_writable_file_extensions() -> anyhow::Result<&'static BTreeSet<String>> {
+pub fn exiftool_writable_file_extensions() -> anyhow::Result<&'static BTreeSet<String>> {
   static WRITABLE_EXTENSIONS: OnceLock<BTreeSet<String>> = OnceLock::new();
 
   // TODO: use get_or_init once it is stabilized: https://github.com/rust-lang/rust/issues/109737
-  //WRITABLE_EXTENSIONS.get_or_try_init(exif_tool_writable_file_extensions_internal)
+  //WRITABLE_EXTENSIONS.get_or_try_init(exiftool_writable_file_extensions_internal)
 
   if let Some(value) = WRITABLE_EXTENSIONS.get() {
     return Ok(value);
   }
 
-  let value = exif_tool_writable_file_extensions_internal()?;
+  let value = exiftool_writable_file_extensions_internal()?;
   let _ = WRITABLE_EXTENSIONS.set(value);
 
   Ok(WRITABLE_EXTENSIONS.get().unwrap())

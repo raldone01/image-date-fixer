@@ -29,7 +29,7 @@ use tracing::{Level, error, info, trace, warn};
 
 use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
 use exiftool::{
-  exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date,
+  exiftool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date,
   wrap_with_exiftool_repair,
 };
 
@@ -338,12 +338,20 @@ fn process_file(file_path: &Path, process_state: &Arc<ProcessState>) {
     .stat_files_processed
     .fetch_add(1, Ordering::Relaxed);
   if let Err(errors) = process_file_internal(file_path, process_state) {
-    error!(
+    if errors.len() == 1 {
+      error!(
         file_path = %file_path.display(),
-        error_count = errors.len(),
-        errors = ?errors,
+        source = ?errors[0],
         "Failed to process file",
-    );
+      );
+    } else {
+      error!(
+          file_path = %file_path.display(),
+          error_count = errors.len(),
+          errors = ?errors,
+          "Failed to process file",
+      );
+    }
 
     process_state
       .stat_files_errors
@@ -397,14 +405,14 @@ fn process_file_internal(
     .map(str::to_ascii_uppercase);
 
   // check that exif tool can work with this file type
-  let exif_tool_writable_file_extensions = match exif_tool_writable_file_extensions() {
+  let exiftool_writable_file_extensions = match exiftool_writable_file_extensions() {
     Ok(exts) => exts,
     Err(e) => {
       errors.push(ErrorWithFilePath::new(file_path, e));
       return Err(errors);
     },
   };
-  if file_extension.is_some_and(|ext| exif_tool_writable_file_extensions.contains(&ext)) {
+  if file_extension.is_some_and(|ext| exiftool_writable_file_extensions.contains(&ext)) {
     // guess the date from the file path
     let file_name = file_path
       .file_name()
@@ -764,7 +772,7 @@ fn main() -> anyhow::Result<()> {
 
     writeln!(&mut stdout, "Supported file extensions:")?;
     let items_per_line = 10;
-    for (i, extension) in exif_tool_writable_file_extensions()?.iter().enumerate() {
+    for (i, extension) in exiftool_writable_file_extensions()?.iter().enumerate() {
       if i % items_per_line == 0 {
         write!(&mut stdout, "  ")?;
       }
@@ -812,6 +820,14 @@ fn main() -> anyhow::Result<()> {
 
   if print_stats {
     process_state.pretty_print_stats()?;
+  }
+
+  let stat_files_errors = process_state.stat_files_errors.load(Ordering::Relaxed);
+  if stat_files_errors > 0 {
+    error!(
+      "Finished processing with {stat_files_errors} files that had errors. Check the logs for more details.",
+    );
+    exit(1);
   }
 
   Ok(())
