@@ -11,8 +11,10 @@ use anyhow::Context as _;
 use chrono::NaiveDateTime;
 use tracing::{error, info};
 
+use crate::tie_command_to_self::tie_command_to_self;
+
 thread_local! {
-  static EXIFTOOL: RefCell<Option<RespawningExifToolWorker>> = const { RefCell::new(None) };
+  static EXIFTOOL: RefCell<RespawningExifToolWorker> = const { RefCell::new(RespawningExifToolWorker::new()) };
 }
 
 struct ExifToolWorker {
@@ -22,16 +24,19 @@ struct ExifToolWorker {
 
 impl ExifToolWorker {
   fn new() -> anyhow::Result<Self> {
-    let mut process = Command::new("exiftool")
+    let mut command = Command::new("exiftool");
+    command
       .arg("-stay_open")
       .arg("True")
       .arg("-@")
       .arg("-")
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
-      .stderr(Stdio::null())
-      .spawn()
-      .context("Failed to spawn exiftool")?;
+      .stderr(Stdio::null());
+
+    tie_command_to_self(&mut command);
+
+    let mut process = command.spawn().context("Failed to spawn exiftool")?;
 
     let stdout = process
       .stdout
@@ -89,24 +94,29 @@ impl Drop for ExifToolWorker {
 }
 
 struct RespawningExifToolWorker {
-  worker: ExifToolWorker,
+  cached_worker: Option<ExifToolWorker>,
 }
 
 impl RespawningExifToolWorker {
-  fn new() -> anyhow::Result<Self> {
-    Ok(Self {
-      worker: ExifToolWorker::new()?,
-    })
+  #[must_use]
+  const fn new() -> Self {
+    Self {
+      cached_worker: None,
+    }
   }
 
   fn execute(&mut self, args: impl IntoIterator<Item = impl AsRef<str>>) -> anyhow::Result<String> {
-    match self.worker.execute(args) {
-      Ok(output) => Ok(output),
-      Err(e) => {
-        error!("ExifTool execution failed: {}. Respawning exiftool...", e);
-        self.worker = ExifToolWorker::new()?;
-        Err(e)
+    let mut exif_tool_worker = match self.cached_worker.take() {
+      Some(worker) => worker,
+      None => ExifToolWorker::new()?,
+    };
+    match exif_tool_worker.execute(args) {
+      Ok(output) => {
+        // Put the worker back into the cache for future use
+        self.cached_worker = Some(exif_tool_worker);
+        Ok(output)
       },
+      Err(e) => Err(e),
     }
   }
 }
@@ -122,23 +132,11 @@ pub fn has_exiftool() -> bool {
     .unwrap_or(false)
 }
 
-/// Gets a thread-local RespawningExifToolWorker, spawning it if it doesn't exist yet.
-fn get_exif_tool(
-  et: &mut Option<RespawningExifToolWorker>,
-) -> anyhow::Result<&mut RespawningExifToolWorker> {
-  if et.is_none() {
-    *et = Some(RespawningExifToolWorker::new()?);
-  }
-  Ok(et.as_mut().unwrap())
-}
-
 pub fn get_exif_date(
   file: &Path,
   ignore_minor_exif_errors: bool,
 ) -> anyhow::Result<Option<NaiveDateTime>> {
   EXIFTOOL.with_borrow_mut(|et| {
-    let et = get_exif_tool(et)?;
-
     let mut args = Vec::new();
     if ignore_minor_exif_errors {
       args.push(Cow::Borrowed("-m"));
@@ -178,8 +176,6 @@ pub fn set_exif_date(
   let date_str = date.format("%Y-%m-%d %H:%M:%S").to_string();
 
   EXIFTOOL.with_borrow_mut(|et| {
-    let et = get_exif_tool(et)?;
-
     let mut args = Vec::new();
     if ignore_minor_exif_errors {
       args.push(Cow::Borrowed("-m"));
@@ -194,10 +190,8 @@ pub fn set_exif_date(
       true
     } else {
       error!(
-        "\"{}\": Failed to set EXIF date to {}. exiftool output: {}",
+        "\"{}\": Failed to set EXIF date to {date_str}. exiftool output: {output}",
         file.display(),
-        date_str,
-        output
       );
       false
     })
@@ -207,7 +201,6 @@ pub fn set_exif_date(
 fn exif_tool_writable_file_extensions_internal() -> anyhow::Result<BTreeSet<String>> {
   // run exiftool to get the list of writable file extensions
   EXIFTOOL.with_borrow_mut(|et| {
-    let et = get_exif_tool(et)?;
     let output_str = et.execute(vec!["-listwf".to_string()])?;
     let mut extensions = BTreeSet::new();
     for line_str in output_str.lines() {

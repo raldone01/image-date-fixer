@@ -4,16 +4,16 @@ extern crate alloc;
 
 mod date_extractors;
 mod exiftool;
+mod pretty_duration;
+mod tie_command_to_self;
 
 use alloc::{collections::BTreeSet, sync::Arc};
 use anyhow::{Context as _, bail};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use clap::{Arg, ArgAction, command, value_parser};
 use core::{
-  fmt::Write as _,
   str::FromStr as _,
   sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-  time::Duration,
 };
 use date_extractors::{ConfidentNaiveDateTime, DateConfidence, get_date_for_file};
 use exiftool::{exif_tool_writable_file_extensions, get_exif_date, has_exiftool, set_exif_date};
@@ -91,81 +91,6 @@ fn get_modified_time(file_path: &Path) -> Option<NaiveDateTime> {
 
   let modified_date_time = DateTime::<Utc>::from(modified_time);
   Some(modified_date_time.naive_utc())
-}
-
-#[must_use]
-fn pretty_duration(duration: Duration) -> String {
-  const SECONDS_PER_MINUTE: u64 = 60;
-  const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
-  const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
-
-  let mut result = String::with_capacity(32);
-  let secs = duration.as_secs();
-
-  if secs >= SECONDS_PER_DAY {
-    let days = secs / SECONDS_PER_DAY;
-    let hours = (secs % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
-    let minutes = (secs % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
-
-    write!(result, "{days}d").unwrap();
-    if hours > 0 {
-      write!(result, " {hours}h").unwrap();
-    }
-    if minutes > 0 {
-      write!(result, " {minutes}m").unwrap();
-    }
-  } else if secs >= SECONDS_PER_HOUR {
-    let hours = secs / SECONDS_PER_HOUR;
-    let minutes = (secs % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
-    let seconds = secs % SECONDS_PER_MINUTE;
-
-    write!(result, "{hours}h").unwrap();
-    if minutes > 0 {
-      write!(result, " {minutes}m").unwrap();
-    }
-    if seconds > 0 {
-      write!(result, " {seconds}s").unwrap();
-    }
-  } else if secs >= SECONDS_PER_MINUTE {
-    let minutes = secs / SECONDS_PER_MINUTE;
-    let seconds = secs % SECONDS_PER_MINUTE;
-
-    write!(result, "{minutes}m").unwrap();
-    if seconds > 0 {
-      write!(result, " {seconds}s").unwrap();
-    }
-  } else if secs >= 1 {
-    let millis = duration.subsec_millis();
-    write!(result, "{secs}s").unwrap();
-    if millis > 0 {
-      write!(result, " {millis}ms").unwrap();
-    }
-  } else {
-    // Sub-second handling
-    let nanos = duration.subsec_nanos();
-
-    if nanos == 0 {
-      return "0ns".to_string();
-    } else if nanos >= 1_000_000 {
-      let millis = nanos / 1_000_000;
-      let micros = (nanos % 1_000_000) / 1_000;
-      write!(result, "{millis}ms").unwrap();
-      if micros > 0 {
-        write!(result, " {micros}µs").unwrap();
-      }
-    } else if nanos >= 1_000 {
-      let micros = nanos / 1_000;
-      let ns = nanos % 1_000;
-      write!(result, "{micros}µs").unwrap();
-      if ns > 0 {
-        write!(result, " {ns}ns").unwrap();
-      }
-    } else {
-      write!(result, "{nanos}ns").unwrap();
-    }
-  }
-
-  result
 }
 
 struct ProcessState {
@@ -250,7 +175,7 @@ impl ProcessState {
       writeln!(
         &mut stdout,
         "  Time taken: {}",
-        pretty_duration(std_duration)
+        pretty_duration::pretty_duration(std_duration)
       )?;
     }
 
