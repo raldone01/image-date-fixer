@@ -98,13 +98,23 @@ clap = { version = "4.5", default-features = false, features = [
   "suggestions",
   "wrap_help",
 ] }
-thiserror = { version = "2.0", default-features = false }
-tracing = { version = "0.1", default-features = false }
+thiserror = { version = "2.0", default-features = false, features = [
+  "std", # Provides support for backtraces.
+] }
+tracing = { version = "0.1", default-features = false, features = [
+  "std",        # No idea what this changes. It is not required.
+  "attributes", # No idea what this changes. It is not required.
+] }
 tracing-subscriber = { version = "0.3", default-features = false, features = [
   "env-filter",
   "fmt",
+  "smallvec",   # No idea what this changes. It is not required.
+  "std",        # No idea what this changes. It is not required.
 ] }
-chumsky = { version = "0.12", default-features = false }
+chumsky = { version = "0.12", default-features = false, features = [
+  "stacker", # Prevents stack overflows.
+  "std",     # No idea what this changes. It is not required.
+] }
 chrono = { version = "0.4", default-features = false, features = [
   "std",
   "clock",
@@ -113,15 +123,24 @@ jwalk = { version = "0.8", default-features = false }
 rayon = { version = "1.10", default-features = false }
 ctrlc = { version = "3.5.2", default-features = false }
 regex = { version = "1.11", default-features = false, features = [
-  "unicode-case",
-  "unicode-perl",
+  "unicode-case", # Minimal necessary feature
+  "unicode-perl", # Minimal necessary feature
+  "unicode",      # Enable all unicode features for safety
+  "std",          # Improves performance
+  "perf",         # Improves performance further
 ] }
 ariadne = { version = "0.6", default-features = false, features = [
   "auto-color",
 ] }
-nom = { version = "8.0", default-features = false }
-anyhow = { version = "1.0", default-features = false }
-libc = { version = "0.2.180", default-features = false }
+nom = { version = "8.0", default-features = false, features = [
+  "std", # No idea what this changes. It is not required.
+] }
+anyhow = { version = "1.0", default-features = false, features = [
+  "std", # No idea what this changes. It is not required.
+] }
+libc = { version = "0.2.180", default-features = false, features = [
+  "std", # No idea what this changes. It is not required.
+] }
 
 [lints]
 workspace = true
