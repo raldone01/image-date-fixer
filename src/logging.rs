@@ -1,7 +1,5 @@
-use std::{
-  fmt::{self, Write as _},
-  io,
-};
+use core::fmt::{self, Write as _};
+use std::io;
 
 use tracing::{Event, Level, Subscriber, field::Visit};
 use tracing_subscriber::{
@@ -41,19 +39,19 @@ where
       Level::ERROR => ("\x1b[31m", "ERROR"), // Red
     };
     // Reset color
-    write!(writer, "{}{} \x1b[0m", color_start, level_str)?;
+    write!(writer, "{color_start}{level_str} \x1b[0m")?;
 
     // Render Target
     write!(writer, "{}: ", event.metadata().target())?;
 
     // Print the file_path prefix if it exists
     if let Some(path) = visitor.file_path {
-      write!(writer, "\"{}\": ", path)?;
+      write!(writer, "\"{path}\": ")?;
     }
 
     // Print the main log message
     if let Some(msg) = visitor.message {
-      write!(writer, "{}", msg)?;
+      write!(writer, "{msg}")?;
     }
 
     // Print any other fields
@@ -76,12 +74,12 @@ impl Visit for PathVisitor {
   fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
     let name = field.name();
     if name == "file_path" {
-      self.file_path = Some(format!("{:?}", value));
+      self.file_path = Some(format!("{value:?}"));
     } else if name == "message" {
-      self.message = Some(format!("{:?}", value));
+      self.message = Some(format!("{value:?}"));
     } else {
       // Capture remaining structured fields
-      let _ = write!(self.others, " {}={:?}", name, value);
+      let _ = write!(self.others, " {name}={value:?}");
     }
   }
 }

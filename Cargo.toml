@@ -91,6 +91,12 @@ keywords = ["image", "exif", "date", "time", "fixer"]
 clap = { version = "4.5", default-features = false, features = [
   "cargo",
   "std",
+  "color",
+  "help",
+  "usage",
+  "error-context",
+  "suggestions",
+  "wrap_help",
 ] }
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false }

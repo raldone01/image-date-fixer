@@ -69,7 +69,6 @@ fn set_modified_time(
   Ok(())
 }
 
-#[must_use]
 fn get_modified_time(file_path: &Path) -> Result<NaiveDateTime, ErrorWithFilePath> {
   let metadata = std::fs::metadata(file_path)
     .map_err(|e| ErrorWithFilePath::new(file_path, e).context("Failed to get metadata for file"))?;
@@ -543,19 +542,17 @@ fn process_file_internal(
       },
     )
     .with_context(|| {
-      if original_exif_date.is_some() {
+      if let Some(original_exif_date) = original_exif_date {
         format!(
-          "Failed to overwrite EXIF date {} with new EXIF date {}",
-          original_exif_date.unwrap(),
-          new_exif_date
+          "Failed to overwrite EXIF date {original_exif_date} with new EXIF date {new_exif_date}",
         )
       } else {
-        format!("Failed to set EXIF date to new EXIF date {}", new_exif_date)
+        format!("Failed to set EXIF date to new EXIF date {new_exif_date}")
       }
     });
     match set_exif_date_result {
       // update the statistics
-      Ok(_) => {
+      Ok(()) => {
         if original_exif_date.is_some() {
           process_state
             .stat_exif_overwritten

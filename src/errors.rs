@@ -1,4 +1,4 @@
-use alloc::fmt::Display;
+use core::fmt::Display;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -21,7 +21,6 @@ impl ErrorWithFilePath {
     }
   }
 
-  #[must_use]
   pub fn from_source<E: Into<anyhow::Error>>(
     file_path: impl Into<PathBuf>,
   ) -> impl FnOnce(E) -> Self {

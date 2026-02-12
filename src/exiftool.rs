@@ -87,9 +87,8 @@ impl ExifToolWorker {
   #[must_use]
   fn is_running(&mut self) -> bool {
     match self.process.try_wait() {
-      Ok(Some(_)) => false,
       Ok(None) => true,
-      Err(_) => false,
+      Err(_) | Ok(Some(_)) => false,
     }
   }
 }
@@ -136,8 +135,7 @@ pub fn has_exiftool() -> bool {
     .stdout(Stdio::null())
     .stderr(Stdio::null())
     .status()
-    .map(|s| s.success())
-    .unwrap_or(false)
+    .is_ok_and(|s| s.success())
 }
 
 pub fn get_exif_date(
