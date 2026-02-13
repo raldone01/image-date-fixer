@@ -92,9 +92,10 @@ struct ProcessState {
   ignore_minor_exif_errors: bool,
   repair_exif_errors: bool,
 
-  stat_folders_processed: AtomicUsize,
+  stat_folders_checked: AtomicUsize,
   stat_folders_skipped: AtomicUsize,
-  stat_files_processed: AtomicUsize,
+  stat_files_checked: AtomicUsize,
+  stat_media_files_checked: AtomicUsize,
   stat_files_skipped: AtomicUsize,
   stat_files_errors: AtomicUsize,
   stat_exif_updated: AtomicUsize,
@@ -124,9 +125,10 @@ impl ProcessState {
       ignore_minor_exif_errors,
       repair_exif_errors,
 
-      stat_folders_processed: AtomicUsize::new(0),
+      stat_folders_checked: AtomicUsize::new(0),
       stat_folders_skipped: AtomicUsize::new(0),
-      stat_files_processed: AtomicUsize::new(0),
+      stat_files_checked: AtomicUsize::new(0),
+      stat_media_files_checked: AtomicUsize::new(0),
       stat_files_skipped: AtomicUsize::new(0),
       stat_files_errors: AtomicUsize::new(0),
       stat_exif_updated: AtomicUsize::new(0),
@@ -136,9 +138,10 @@ impl ProcessState {
   }
 
   fn pretty_print_stats(&self) -> Result<(), io::Error> {
-    let folders_processed = self.stat_folders_processed.load(Ordering::Relaxed);
+    let folders_checked = self.stat_folders_checked.load(Ordering::Relaxed);
     let folders_skipped = self.stat_folders_skipped.load(Ordering::Relaxed);
-    let files_processed = self.stat_files_processed.load(Ordering::Relaxed);
+    let files_checked = self.stat_files_checked.load(Ordering::Relaxed);
+    let media_files_checked = self.stat_media_files_checked.load(Ordering::Relaxed);
     let files_skipped = self.stat_files_skipped.load(Ordering::Relaxed);
     let files_errors = self.stat_files_errors.load(Ordering::Relaxed);
     let exif_updated = self.stat_exif_updated.load(Ordering::Relaxed);
@@ -149,9 +152,10 @@ impl ProcessState {
     let mut stdout = io::stdout().lock();
 
     writeln!(&mut stdout, "Statistics:")?;
-    writeln!(&mut stdout, "  Folders processed: {folders_processed}")?;
+    writeln!(&mut stdout, "  Folders checked: {folders_checked}")?;
     writeln!(&mut stdout, "  Folders skipped: {folders_skipped}")?;
-    writeln!(&mut stdout, "  Files processed: {files_processed}")?;
+    writeln!(&mut stdout, "  Files checked: {files_checked}")?;
+    writeln!(&mut stdout, "  Media files checked: {media_files_checked}")?;
     writeln!(&mut stdout, "  Files skipped: {files_skipped}")?;
     writeln!(&mut stdout, "  Files with errors: {files_errors}")?;
     writeln!(&mut stdout, "  EXIF dates updated: {exif_updated}")?;
@@ -174,7 +178,7 @@ impl ProcessState {
   }
 }
 
-fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
+fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
   if process_state.should_exit.load(Ordering::Relaxed) {
     return;
   }
@@ -187,7 +191,7 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
   }
 
   process_state
-    .stat_folders_processed
+    .stat_folders_checked
     .fetch_add(1, Ordering::Relaxed);
 
   info!(
@@ -251,14 +255,14 @@ fn process_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     || path == root_dir
     {
       process_state
-        .stat_folders_processed
+        .stat_folders_checked
         .fetch_add(1, Ordering::Relaxed);
       trace!(
         file_path = %path.display(),
         "Processing directory",
       );
     } else if file_type.is_file() {
-      process_file(&path, process_state);
+      check_file(&path, process_state);
     } else {
       process_state
         .stat_files_skipped
@@ -329,15 +333,15 @@ macro_rules! dyn_event {
     };
 }
 
-fn process_file(file_path: &Path, process_state: &Arc<ProcessState>) {
+fn check_file(file_path: &Path, process_state: &Arc<ProcessState>) {
   trace!(
     file_path = %file_path.display(),
     "Processing file",
   );
   process_state
-    .stat_files_processed
+    .stat_files_checked
     .fetch_add(1, Ordering::Relaxed);
-  if let Err(errors) = process_file_internal(file_path, process_state) {
+  if let Err(errors) = process_file(file_path, process_state) {
     if errors.len() == 1 {
       error!(
         file_path = %file_path.display(),
@@ -359,7 +363,7 @@ fn process_file(file_path: &Path, process_state: &Arc<ProcessState>) {
   }
 }
 
-fn process_file_internal(
+fn process_file(
   file_path: &Path,
   process_state: &ProcessState,
 ) -> Result<(), Vec<ErrorWithFilePath>> {
@@ -413,6 +417,11 @@ fn process_file_internal(
     },
   };
   if file_extension.is_some_and(|ext| exiftool_writable_file_extensions.contains(&ext)) {
+    // We are dealing with a file type that exiftool can write to.
+    process_state
+      .stat_media_files_checked
+      .fetch_add(1, Ordering::Relaxed);
+
     // guess the date from the file path
     let file_name = file_path
       .file_name()
@@ -655,10 +664,10 @@ fn new_argparser() -> clap::Command {
     .action(ArgAction::SetTrue),
   )
   .arg(
-    Arg::new("print-stats")
-    .long("print-stats")
-    .help("Print statistics")
-    .action(ArgAction::SetTrue)
+    Arg::new("no-print-stats")
+    .long("no-print-stats")
+    .help("Do not print final statistics")
+    .action(ArgAction::SetTrue),
   )
   .arg(
     Arg::new("skip-hidden-files")
@@ -752,8 +761,8 @@ fn main() -> anyhow::Result<()> {
     .get_one::<bool>("print-supported-file-extensions")
     .copied()
     .unwrap_or(false);
-  let print_stats = matches
-    .get_one::<bool>("print-stats")
+  let print_stats = !matches
+    .get_one::<bool>("no-print-stats")
     .copied()
     .unwrap_or(false);
   let skip_hidden_files = matches
@@ -809,7 +818,7 @@ fn main() -> anyhow::Result<()> {
   files.par_bridge().for_each(|file_path| {
     // check if the file is a directory
     if file_path.is_dir() {
-      process_dir_recursive(file_path, &process_state);
+      check_dir_recursive(file_path, &process_state);
     } else {
       if is_excluded(file_path, &process_state.excluded_files) {
         process_state
@@ -817,7 +826,7 @@ fn main() -> anyhow::Result<()> {
           .fetch_add(1, Ordering::Relaxed);
         return;
       }
-      process_file(file_path, &process_state);
+      check_file(file_path, &process_state);
     }
   });
 

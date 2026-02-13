@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fix double logging exiftool errors.
+- Set default log level to INFO.
+- Add a specific stat tracker for media files.
+- Show final stats by default.
+
 ## [0.2.2] - 2026-02-13
 
 - Capture exiftool stderr output to improve error messages when exiftool fails unexpectedly.

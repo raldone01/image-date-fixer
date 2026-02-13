@@ -5,7 +5,7 @@ use thiserror::Error;
 use tracing::error;
 
 #[derive(Error, Debug)]
-#[error("Error processing file {}: {source}", file_path.display())]
+#[error("Error processing file {}", file_path.display())]
 pub struct ErrorWithFilePath {
   pub file_path: PathBuf,
   #[source]

@@ -21,7 +21,6 @@ This can be very useful for tagging photos received from friends or family, or f
 - Supports recursive processing of directories
 - Can exclude specific directories from processing
 - Dry-run mode for testing without modifying files
-- `--print-stats` will show a summary of the changes made
 - Use `--help` to see all available options
 
 ## Example usage - from binary
@@ -30,7 +29,7 @@ Make sure to add `~/.cargo/bin` to your `PATH`.
 
 ```shell
 cargo install image-date-fixer
-image-date-fixer --print-stats --ignore-minor-exif-errors  --log-level INFO --fix-future-modified-times 2 --fix-future-exif-dates 2 --files /my_folder_with_images --exclude-files /my_folder_with_images/ignored --dry-run
+image-date-fixer --ignore-minor-exif-errors --fix-future-modified-times 2 --fix-future-exif-dates 2 --files /my_folder_with_images --exclude-files /my_folder_with_images/ignored --dry-run
 ```
 
 
@@ -40,7 +39,7 @@ image-date-fixer --print-stats --ignore-minor-exif-errors  --log-level INFO --fi
 git clone <this repo>
 cd image-date-fixer
 cargo build --release
-./target/release/image-date-fixer --print-stats --ignore-minor-exif-errors  --log-level INFO --fix-future-modified-times 2 --fix-future-exif-dates 2 --files /my_folder_with_images --exclude-files /my_folder_with_images/ignored --dry-run
+./target/release/image-date-fixer --ignore-minor-exif-errors --fix-future-modified-times 2 --fix-future-exif-dates 2 --files /my_folder_with_images --exclude-files /my_folder_with_images/ignored --dry-run
 ```
 
 ## Contributing

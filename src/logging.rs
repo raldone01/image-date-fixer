@@ -1,7 +1,7 @@
 use core::fmt::{self, Write as _};
 use std::io;
 
-use tracing::{Event, Level, Subscriber, field::Visit};
+use tracing::{Event, Level, Subscriber, field::Visit, level_filters::LevelFilter};
 use tracing_subscriber::{
   EnvFilter,
   fmt::{FmtContext, FormatEvent, FormatFields, format::Writer},
@@ -92,7 +92,11 @@ pub fn setup_logging(log_level: Option<Level>) {
     logging_builder.with_max_level(level).init();
   } else {
     logging_builder
-      .with_env_filter(EnvFilter::from_default_env())
+      .with_env_filter(
+        EnvFilter::builder()
+          .with_default_directive(LevelFilter::INFO.into())
+          .from_env_lossy(),
+      )
       .init();
   }
 }
