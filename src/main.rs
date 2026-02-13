@@ -672,7 +672,7 @@ fn new_argparser() -> clap::Command {
   .arg(
     Arg::new("repair-exif-errors")
     .long("repair-exif-errors")
-    .help("Repair EXIF errors")
+    .help("Attempt to repair EXIF errors if exiftool fails to read or write EXIF data. This can fix some errors but may also cause data loss, so use with caution.")
     .action(ArgAction::SetTrue),
   )
 }
