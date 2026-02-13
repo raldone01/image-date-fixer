@@ -80,36 +80,25 @@ impl ExifToolWorker {
     for arg in args {
       writeln!(stdin, "{}", arg.as_ref()).context("Failed to write args to exiftool")?;
     }
+
+    // Instruct exiftool to echo a sentinel to stderr so we know when to stop reading.
+    // {{ready}} escapes to {ready} in the format string.
+    writeln!(stdin, "-echo4\n{{ready}}").context("Failed to write stderr sentinel")?;
     writeln!(stdin, "-execute").context("Failed to execute command")?;
 
-    let mut stderr_string = String::new();
-    while self
-      .stderr_reader
-      .fill_buf()
-      .context("Failed to read from from exiftool stderr")?
-      .is_empty()
-      == false
-    {
-      let mut line = String::new();
-      self
-        .stderr_reader
-        .read_line(&mut line)
-        .context("Failed to read from from exiftool stderr")?;
-      stderr_string.push_str(&line);
-    }
-
+    // Read Stdout
     let mut stdout_string = String::new();
     let mut line = String::new();
+    let mut unexpected_eof_in_stdout = false;
     loop {
       line.clear();
-      let bytes_read = self
-        .stdout_reader
-        .read_line(&mut line)
-        .context("Failed to read from exiftool")?;
+      let bytes_read = self.stdout_reader.read_line(&mut line).with_context(|| {
+        format!("Failed to read from exiftool stdout. Partial stdout:\n{stdout_string}")
+      })?;
+
       if bytes_read == 0 {
-        return Err(anyhow::anyhow!(
-          "ExifTool process exited unexpectedly (EOF)"
-        ));
+        unexpected_eof_in_stdout = true;
+        break;
       }
 
       if line.trim() == "{ready}" {
@@ -117,6 +106,33 @@ impl ExifToolWorker {
       }
       stdout_string.push_str(&line);
     }
+
+    // Read Stderr
+    let mut stderr_string = String::new();
+    loop {
+      line.clear();
+      let bytes_read = self.stderr_reader.read_line(&mut line).with_context(|| {
+        format!("Failed to read from exiftool stderr. Partial stderr:\n{stderr_string}\n{}stdout:\n{stdout_string}", if unexpected_eof_in_stdout { "Unexpected EOF while reading exiftool stdout. " } else { "" })
+      })?;
+
+      // If we hit EOF here but stdout finished successfully,
+      // it usually means the pipe closed or process is shutting down.
+      if bytes_read == 0 {
+        break;
+      }
+
+      if line.trim() == "{ready}" {
+        break;
+      }
+      stderr_string.push_str(&line);
+    }
+
+    if unexpected_eof_in_stdout {
+      anyhow::bail!(
+        "Unexpected EOF while reading exiftool stdout. Stderr:\n{stderr_string}\nPartial stdout:\n{stdout_string}"
+      );
+    }
+
     Ok(CommandOutput {
       stdout: stdout_string,
       stderr: stderr_string,
