@@ -603,14 +603,14 @@ fn new_argparser() -> clap::Command {
     .long("files")
     .help("Files or directories to process")
     .num_args(1..)
-    .value_name("FILES")
+    .value_name("files")
     .value_parser(value_parser!(PathBuf)),
   )
   .arg(
     Arg::new("positional_files")
     .help("Files or directories to process")
     .num_args(1..)
-    .value_name("FILES")
+    .value_name("files")
     .value_parser(value_parser!(PathBuf)),
   )
   .arg(
@@ -618,25 +618,28 @@ fn new_argparser() -> clap::Command {
     .long("exclude-files")
     .help("Files or directories to exclude")
     .num_args(1..)
-    .value_name("FILES")
+    .value_name("excluded files")
     .value_parser(value_parser!(PathBuf)),
   )
   .arg(
     Arg::new("log-level")
     .long("log-level")
     .help("Log level")
+    .value_name("log level")
     .value_parser(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
   )
   .arg(
     Arg::new("fix-future-modified-times")
     .long("fix-future-modified-times")
     .help("Fix modified times that are this many days in the future")
+    .value_name("days into the future")
     .value_parser(value_parser!(u64)),
   )
   .arg(
     Arg::new("fix-future-exif-dates")
     .long("fix-future-exif-dates")
     .help("Fix exif dates that are this many days in the future")
+    .value_name("days into the future")
     .value_parser(value_parser!(u64)),
   )
   .arg(
