@@ -199,7 +199,7 @@ fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     "Processing top level directory",
   );
 
-  let entries = {
+  let mut entries = {
     let process_state = process_state.clone();
     WalkDir::new(root_dir)
       .skip_hidden(process_state.skip_hidden_files)
@@ -217,7 +217,7 @@ fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
       .into_iter()
   };
 
-  let _ = entries.par_bridge().try_for_each(|entry_result| {
+  let _ = entries.try_for_each(|entry_result| {
     if process_state.should_exit.load(Ordering::Relaxed) {
       return Err(());
     }
