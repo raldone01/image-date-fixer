@@ -3,12 +3,13 @@ use core::cell::RefCell;
 use std::{
   io::{BufRead, BufReader, Write},
   path::Path,
-  process::{Child, Command, Stdio},
+  process::{Command, Stdio},
   sync::OnceLock,
 };
 
 use anyhow::Context as _;
 use chrono::NaiveDateTime;
+use process_wrap::std::*;
 use tracing::info;
 
 use crate::{errors::ErrorWithFilePath, tie_command_to_thread::tie_command_to_thread};
@@ -23,7 +24,7 @@ struct CommandOutput {
 }
 
 struct ExifToolWorker {
-  process: Child,
+  process: Box<dyn ChildWrapper>,
   stdout_reader: BufReader<std::process::ChildStdout>,
   stderr_reader: BufReader<std::process::ChildStderr>,
 }
@@ -42,15 +43,27 @@ impl ExifToolWorker {
 
     tie_command_to_thread(&mut command);
 
-    let mut process = command.spawn().context("Failed to spawn exiftool")?;
+    let mut wrapped_cmd = CommandWrap::from(command);
+
+    #[cfg(windows)]
+    {
+      use windows::Win32::System::Threading::*;
+      wrapped_cmd
+        .wrap(CreationFlags(CREATE_NO_WINDOW | DETACHED_PROCESS))
+        .wrap(JobObject);
+    }
+    #[cfg(unix)]
+    wrapped_cmd.wrap(ProcessGroup::leader());
+
+    let mut process = wrapped_cmd.spawn().context("Failed to spawn exiftool")?;
 
     let stdout = process
-      .stdout
+      .stdout()
       .take()
       .context("Failed to capture stdout of exiftool")?;
 
     let stderr = process
-      .stderr
+      .stderr()
       .take()
       .context("Failed to capture stderr of exiftool")?;
 
@@ -64,7 +77,7 @@ impl ExifToolWorker {
   fn execute(&mut self, args: &[impl AsRef<str>]) -> anyhow::Result<CommandOutput> {
     let stdin = self
       .process
-      .stdin
+      .stdin()
       .as_mut()
       .context("Failed to capture stdin")?;
 
@@ -151,7 +164,7 @@ impl ExifToolWorker {
 
 impl Drop for ExifToolWorker {
   fn drop(&mut self) {
-    if let Some(mut stdin) = self.process.stdin.take() {
+    if let Some(mut stdin) = self.process.stdin().take() {
       let _ = writeln!(stdin, "-stay_open\nFalse");
     }
     let _ = self.process.wait();
