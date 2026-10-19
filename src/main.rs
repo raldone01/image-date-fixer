@@ -7,7 +7,7 @@ mod errors;
 mod exiftool;
 mod logging;
 mod pretty_duration;
-mod tie_command_to_self;
+mod tie_command_to_thread;
 
 use alloc::{collections::BTreeSet, sync::Arc};
 use core::{
@@ -199,7 +199,7 @@ fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     "Processing top level directory",
   );
 
-  let mut entries = {
+  let entries = {
     let process_state = process_state.clone();
     WalkDir::new(root_dir)
       .skip_hidden(process_state.skip_hidden_files)
@@ -207,14 +207,31 @@ fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
         // Filter out excluded directories
         for child in children.iter_mut().flatten() {
           if is_excluded(&child.path(), &process_state.excluded_files) {
-            child.read_children_path = None;
+            child.read_children = None;
             process_state
               .stat_folders_skipped
               .fetch_add(1, Ordering::Relaxed);
           }
         }
       })
-      .into_iter()
+      .try_into_iter()
+  };
+
+  let mut entries = match entries {
+    Ok(entries) => entries,
+    Err(e) => {
+      // add stat folder error here
+      process_state
+        .stat_files_errors
+        .fetch_add(1, Ordering::Relaxed);
+      let root_dir_str = root_dir.display().to_string();
+      error!(
+        file_path = %root_dir_str,
+        source = %e,
+        "Failed to open the provided file listing"
+      );
+      return;
+    },
   };
 
   let _ = entries.try_for_each(|entry_result| {

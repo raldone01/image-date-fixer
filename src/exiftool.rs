@@ -11,7 +11,7 @@ use anyhow::Context as _;
 use chrono::NaiveDateTime;
 use tracing::info;
 
-use crate::{errors::ErrorWithFilePath, tie_command_to_self::tie_command_to_self};
+use crate::{errors::ErrorWithFilePath, tie_command_to_thread::tie_command_to_thread};
 
 thread_local! {
   static EXIFTOOL: RefCell<RespawningExifToolWorker> = const { RefCell::new(RespawningExifToolWorker::new()) };
@@ -40,7 +40,7 @@ impl ExifToolWorker {
       .stdout(Stdio::piped())
       .stderr(Stdio::piped());
 
-    tie_command_to_self(&mut command);
+    tie_command_to_thread(&mut command);
 
     let mut process = command.spawn().context("Failed to spawn exiftool")?;
 

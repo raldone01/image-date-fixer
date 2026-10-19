@@ -4,4 +4,7 @@
   "rust-analyzer.rustfmt.extraArgs": [
     "+nightly"
   ],
+  "cSpell.words": [
+    "Respawning"
+  ],
 }

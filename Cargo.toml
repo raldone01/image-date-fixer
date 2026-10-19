@@ -111,7 +111,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
   "smallvec",   # No idea what this changes. It is not required.
   "std",        # No idea what this changes. It is not required.
 ] }
-chumsky = { version = "0.12", default-features = false, features = [
+chumsky = { version = "0.13", default-features = false, features = [
   "stacker", # Prevents stack overflows.
   "std",     # No idea what this changes. It is not required.
 ] }
@@ -119,7 +119,7 @@ chrono = { version = "0.4", default-features = false, features = [
   "std",
   "clock",
 ] }
-jwalk = { version = "0.8", default-features = false }
+jwalk = { version = "0.9", default-features = false }
 rayon = { version = "1.10", default-features = false }
 ctrlc = { version = "3.5.2", default-features = false }
 regex = { version = "1.11", default-features = false, features = [
@@ -138,9 +138,7 @@ nom = { version = "8.0", default-features = false, features = [
 anyhow = { version = "1.0", default-features = false, features = [
   "std", # No idea what this changes. It is not required.
 ] }
-libc = { version = "0.2.180", default-features = false, features = [
-  "std", # No idea what this changes. It is not required.
-] }
+nix = { version = "0.31.3", default-features = false }
 
 [lints]
 workspace = true

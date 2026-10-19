@@ -23,7 +23,7 @@ This can be very useful for tagging photos received from friends or family, or f
 - Dry-run mode for testing without modifying files
 - Use `--help` to see all available options
 
-## Example usage - from binary
+## Installation and Usage - from [crates.io](https://crates.io/crates/image-date-fixer)
 
 Make sure to add `~/.cargo/bin` to your `PATH`.
 
@@ -33,7 +33,7 @@ image-date-fixer --ignore-minor-exif-errors --fix-future-modified-times 2 --fix-
 ```
 
 
-## Example usage - from source
+## Installation and Usage - from source
 
 ```shell
 git clone <this repo>
