@@ -234,7 +234,7 @@ fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
     },
   };
 
-  let _ = entries.try_for_each(|entry_result| {
+  let _ = entries.par_bridge().try_for_each(|entry_result| {
     if process_state.should_exit.load(Ordering::Relaxed) {
       return Err(());
     }
