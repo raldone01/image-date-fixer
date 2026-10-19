@@ -217,7 +217,7 @@ fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
       .try_into_iter()
   };
 
-  let mut entries = match entries {
+  let entries = match entries {
     Ok(entries) => entries,
     Err(e) => {
       // add stat folder error here
