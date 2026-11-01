@@ -283,7 +283,7 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
               .fetch_add(1, Ordering::Relaxed);
             info!(
               file_path = %root_dir.display(),
-              "Finished root file",
+              "Finished top level directory",
             );
             return Ok(());
           },
