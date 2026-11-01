@@ -11,6 +11,7 @@ mod tie_command_to_thread;
 
 use alloc::{collections::BTreeSet, sync::Arc};
 use core::{
+  num::NonZero,
   str::FromStr as _,
   sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
@@ -212,6 +213,9 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
 ) {
   let root_walk = {
     let process_state = process_state.clone();
+
+    let thread_count = std::thread::available_parallelism().map_or(4, NonZero::get);
+
     dua_core::walk_roots(
       root_dirs
         .iter()
@@ -224,7 +228,7 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
         })
         .map(|path| path.as_ref().to_path_buf())
         .enumerate(),
-      2,
+      thread_count,
       dua_core::Order::ParentFirst,
       dua_core::Options::default(),
       move |_, entry| {
