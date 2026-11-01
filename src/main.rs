@@ -23,7 +23,6 @@ use std::{
 use anyhow::{Context as _, bail};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use clap::{Arg, ArgAction, command, value_parser};
-use jwalk::WalkDir;
 use rayon::prelude::*;
 use tracing::{Level, error, info, trace, warn};
 
@@ -181,128 +180,190 @@ impl ProcessState {
   }
 }
 
-fn check_dir_recursive(root_dir: &Path, process_state: &Arc<ProcessState>) {
-  if process_state.should_exit.load(Ordering::Relaxed) {
-    return;
+#[must_use]
+fn is_hidden(path: &Path) -> io::Result<bool> {
+  #[cfg(windows)]
+  {
+    use std::{fs, os::windows::fs::MetadataExt};
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    let meta = fs::metadata(path)?;
+    Ok(meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
   }
 
-  if is_excluded(root_dir, &process_state.excluded_files) {
-    process_state
-      .stat_folders_skipped
-      .fetch_add(1, Ordering::Relaxed);
-    return;
+  #[cfg(not(windows))]
+  {
+    // Unix convention: a leading dot in the file name
+    Ok(
+      path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with('.'))
+        .unwrap_or(false),
+    )
   }
+}
 
-  process_state
-    .stat_folders_checked
-    .fetch_add(1, Ordering::Relaxed);
+/// A marker type used to indicate that an operation should be cancelled.
+#[derive(Debug, Clone, Copy)]
+pub struct OperationCancelled;
 
-  info!(
-    file_path = %root_dir.display(),
-    "Processing top level directory",
-  );
-
-  let entries = {
+fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
+  root_dirs: &[P],
+  process_state: &Arc<ProcessState>,
+) {
+  let root_walk = {
     let process_state = process_state.clone();
-    WalkDir::new(root_dir)
-      .skip_hidden(process_state.skip_hidden_files)
-      .process_read_dir(move |_depth, _path, _read_dir_state, children| {
-        // Filter out excluded directories
-        for child in children.iter_mut().flatten() {
-          if is_excluded(&child.path(), &process_state.excluded_files) {
-            child.read_children = None;
-            process_state
-              .stat_folders_skipped
-              .fetch_add(1, Ordering::Relaxed);
+    dua_core::walk_roots(
+      root_dirs
+        .iter()
+        .inspect(|root_dir| {
+          let root_dir = root_dir.as_ref();
+          info!(
+            file_path = %root_dir.display(),
+            "Processing top level directory",
+          );
+        })
+        .map(|path| path.as_ref().to_path_buf())
+        .enumerate(),
+      2,
+      dua_core::Order::ParentFirst,
+      dua_core::Options::default(),
+      move |_, entry| {
+        if process_state.should_exit.load(Ordering::Relaxed) {
+          return false;
+        }
+
+        if process_state.skip_hidden_files {
+          let is_hidden = match is_hidden(&entry.path()) {
+            Ok(is_hidden) => is_hidden,
+            Err(io_error) => {
+              process_state
+                .stat_files_errors
+                .fetch_add(1, Ordering::Relaxed);
+              let file_path = entry.path();
+              error!(
+                file_path = %file_path.display(),
+                source = %io_error,
+                "Failed to check if file is hidden",
+              );
+              return false;
+            },
+          };
+          if is_hidden {
+            return false;
           }
         }
-      })
-      .try_into_iter()
-  };
 
-  let entries = match entries {
-    Ok(entries) => entries,
-    Err(e) => {
-      // add stat folder error here
-      process_state
-        .stat_files_errors
-        .fetch_add(1, Ordering::Relaxed);
-      let root_dir_str = root_dir.display().to_string();
-      error!(
-        file_path = %root_dir_str,
-        source = %e,
-        "Failed to open the provided file listing"
-      );
-      return;
-    },
-  };
+        if is_excluded(&entry.path(), &process_state.excluded_files) {
+          process_state
+            .stat_folders_skipped
+            .fetch_add(1, Ordering::Relaxed);
+          return false;
+        }
 
-  let _ = entries.par_bridge().try_for_each(|entry_result| {
-    if process_state.should_exit.load(Ordering::Relaxed) {
-      return Err(());
-    }
-
-    let entry = match entry_result {
-      Ok(entry) => entry,
-      Err(e) => {
-        let file_path = e.path().map_or_else(
-          || "Unknown path".to_string(),
-          |path_option| path_option.display().to_string(),
-        );
-        error!(
-          file_path = %file_path,
-          source = %e,
-          "Failed to read file entry while processing directory",
-        );
-        process_state
-          .stat_files_errors
-          .fetch_add(1, Ordering::Relaxed);
-        return Ok(());
+        true
       },
-    };
+    )
+  };
 
-    let path = entry.path();
-    if is_excluded(&path, &process_state.excluded_files) {
-      process_state
-        .stat_files_skipped
-        .fetch_add(1, Ordering::Relaxed);
-      return Ok(());
-    }
+  let _: Result<(), OperationCancelled> =
+    root_walk
+      .par_bridge()
+      .try_for_each(|(root_index, root_event)| {
+        if process_state.should_exit.load(Ordering::Relaxed) {
+          return Err(OperationCancelled);
+        }
 
-    let file_type = entry.file_type();
-    if file_type.is_dir()
-    // Always process the root directory even if it is a symlink.
-    || path == root_dir
-    {
-      process_state
-        .stat_folders_checked
-        .fetch_add(1, Ordering::Relaxed);
-      trace!(
-        file_path = %path.display(),
-        "Processing directory",
-      );
-    } else if file_type.is_file() {
-      check_file(&path, process_state);
-    } else {
-      process_state
-        .stat_files_skipped
-        .fetch_add(1, Ordering::Relaxed);
-      if file_type.is_symlink() {
-        warn!(
-          file_path = %path.display(),
-          "Skipping symbolic link",
-        );
-      } else {
-        warn!(
-          file_path = %path.display(),
-          "Skipping non-file entry: {:#?}",
-          file_type,
-        );
-      }
-    }
+        let root_dir = root_dirs[root_index].as_ref();
 
-    Ok(())
-  });
+        let entry_result = match root_event {
+          dua_core::RootEvent::Entry(entry_result) => entry_result,
+          dua_core::RootEvent::Finished => {
+            process_state
+              .stat_folders_checked
+              .fetch_add(1, Ordering::Relaxed);
+            info!(
+              file_path = %root_dir.display(),
+              "Finished root file",
+            );
+            return Ok(());
+          },
+        };
+
+        let entry = match entry_result {
+          Ok(entry) => entry,
+          Err(e) => {
+            /*let file_path = e.path().map_or_else(
+              // TODO: https://github.com/Byron/dua-cli/issues/421 can't migrate this from jwalk
+              || "Unknown path".to_string(),
+              |path_option| path_option.display().to_string(),
+            );
+            error!(
+              file_path = %file_path,
+              source = %e,
+              "Failed to read file entry while processing directory",
+            );*/
+            error!(
+              file_path = %root_dir.display(),
+              source = %e,
+              "Failed to read file entry while processing directory",
+            );
+            process_state
+              .stat_files_errors
+              .fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+          },
+        };
+
+        let path = entry.path();
+        if is_excluded(&path, &process_state.excluded_files) {
+          process_state
+            .stat_files_skipped
+            .fetch_add(1, Ordering::Relaxed);
+          return Ok(());
+        }
+
+        let file_type = entry.file_type;
+        if file_type.is_dir()
+        // Always process the root directory even if it is a symlink.
+        || path == root_dir
+        {
+          process_state
+            .stat_folders_checked
+            .fetch_add(1, Ordering::Relaxed);
+          trace!(
+            file_path = %path.display(),
+            "Processing directory",
+          );
+        } else if file_type.is_file() {
+          check_file(&path, &process_state);
+        } else {
+          process_state
+            .stat_files_skipped
+            .fetch_add(1, Ordering::Relaxed);
+          if file_type.is_symlink() {
+            warn!(
+              file_path = %path.display(),
+              "Skipping symbolic link",
+            );
+          } else {
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            warn!(
+                file_path = %path.display(),
+                "Skipping non-file entry",
+            );
+
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            warn!(
+                file_path = %path.display(),
+                "Skipping non-file entry: {:#?}",
+                file_type,
+            );
+          }
+        }
+
+        Ok(())
+      });
 }
 
 const OLD_MODIFIED_TIME_THRESHOLD: NaiveDateTime = NaiveDateTime::new(
@@ -849,20 +910,27 @@ fn main() -> anyhow::Result<()> {
   })
   .expect("Error setting Ctrl+C handler");
 
-  files.par_bridge().for_each(|file_path| {
-    // check if the file is a directory
-    if file_path.is_dir() {
-      check_dir_recursive(file_path, &process_state);
-    } else {
-      if is_excluded(file_path, &process_state.excluded_files) {
+  let root_dirs: Vec<_> = files
+    .par_bridge()
+    .filter_map(|file_path| {
+      // directories are handed back and collected for the recursive pass
+      if file_path.is_dir() {
+        return Some(file_path);
+      }
+
+      if is_excluded(&file_path, &process_state.excluded_files) {
         process_state
           .stat_files_skipped
           .fetch_add(1, Ordering::Relaxed);
-        return;
+      } else {
+        check_file(&file_path, &process_state);
       }
-      check_file(file_path, &process_state);
-    }
-  });
+
+      None
+    })
+    .collect();
+
+  check_root_dirs_recursive(&root_dirs, &process_state);
 
   if print_stats {
     process_state.pretty_print_stats()?;
