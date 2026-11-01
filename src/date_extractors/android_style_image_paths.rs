@@ -16,7 +16,7 @@ use super::{ChumError, ConfidentNaiveDateTime, DateConfidence};
 
 /// Extracts the date from Android-style image file paths.
 /// Example file paths:
-///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
+///   * `/storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg`
 pub fn get_date_from_android_filepath_nom(
   _file_path: &Path,
   file_name: &str,
@@ -58,7 +58,7 @@ fn parse_num<const N: usize>(num: &str) -> IResult<&str, u32> {
 
 /// Extracts the date from Android-style image file paths.
 /// Example file paths:
-///   * /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
+///   * `/storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg`
 #[allow(dead_code)]
 pub fn get_date_from_android_filepath_regex(
   _file_path: &Path,
@@ -116,7 +116,7 @@ where
     .to_slice()
 }
 
-/// /storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg
+/// `/storage/emulated/0/DCIM/Camera/IMG_20190818_130841<POSTFIX>.jpg`
 #[allow(dead_code)]
 pub fn get_date_from_android_filepath_chumsky(
   _file_path: &Path,

@@ -1,8 +1,8 @@
-use core::fmt::{self, Write as _};
-use std::{
+use core::{
   error::Error,
-  io::{self, IsTerminal},
+  fmt::{self, Write as _},
 };
+use std::io::{self, IsTerminal};
 
 use tracing::{Event, Level, Subscriber, field::Visit, level_filters::LevelFilter};
 use tracing_subscriber::{
@@ -20,7 +20,8 @@ struct CustomFormatter<T> {
 }
 
 impl<T: FormatTime> CustomFormatter<T> {
-  fn new(timer: T) -> Self {
+  #[must_use]
+  const fn new(timer: T) -> Self {
     Self { timer }
   }
 }
@@ -151,9 +152,7 @@ pub fn setup_logging(log_level: Option<Level>, color_mode: ColorMode) {
     filter = filter.add_directive(level.into());
   }
 
-  let no_color = std::env::var("NO_COLOR")
-    .map(|value| !value.is_empty())
-    .unwrap_or(false);
+  let no_color = std::env::var("NO_COLOR").is_ok_and(|value| !value.is_empty());
 
   let with_ansi = match color_mode {
     ColorMode::Always => true,

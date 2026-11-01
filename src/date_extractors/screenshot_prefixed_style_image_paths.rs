@@ -7,15 +7,15 @@ use super::{ConfidentNaiveDateTime, get_date_for_file};
 
 /// Extracts the date from screenshot prefixed image file paths.
 /// Example file paths:
-///   * /storage/emulated/0/DCIM/Camera/Screenshot 2020-09-15 191156.png
-///   * /storage/emulated/0/DCIM/Camera/Screenshot_20240720_020223_Jerboa.png
-///   * /storage/emulated/0/DCIM/Camera/Screenshot 2023-08-22 121704_windows_big_ad.png
-///   * /storage/emulated/0/DCIM/Camera/Screenshot_20241108_094517_Mull.jpg
-///   * /storage/emulated/0/DCIM/Camera/screenshot_20241108_094517_Mull.jpg
-///   * /storage/emulated/0/DCIM/Camera/screenshot-20241108_094517_Mull.jpg
+///   * `/storage/emulated/0/DCIM/Camera/Screenshot 2020-09-15 191156.png`
+///   * `/storage/emulated/0/DCIM/Camera/Screenshot_20240720_020223_Jerboa.png`
+///   * `/storage/emulated/0/DCIM/Camera/Screenshot 2023-08-22 121704_windows_big_ad.png`
+///   * `/storage/emulated/0/DCIM/Camera/Screenshot_20241108_094517_Mull.jpg`
+///   * `/storage/emulated/0/DCIM/Camera/screenshot_20241108_094517_Mull.jpg`
+///   * `/storage/emulated/0/DCIM/Camera/screenshot-20241108_094517_Mull.jpg`
 ///
 /// Unsupported:
-///   * /storage/emulated/0/DCIM/Camera/Screenshot_312.png
+///   * `/storage/emulated/0/DCIM/Camera/Screenshot_312.png`
 pub fn get_date_from_screenshot_prefixed_filepath_regex(
   file_path: &Path,
   file_name: &str,

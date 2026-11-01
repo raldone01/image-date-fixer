@@ -9,8 +9,8 @@ option_if_let_else = "allow"
 too_long_first_doc_paragraph = "allow"
 missing_panics_doc = "allow"
 
-nursery = { priority = -1, level = "warn" }
-pedantic = { priority = -1, level = "warn" }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 doc_markdown = "warn"
 manual_let_else = "warn"
 match_same_arms = "warn"
@@ -30,12 +30,12 @@ std_instead_of_alloc = "warn"
 alloc_instead_of_core = "warn"
 
 [workspace.lints.rust]
-nonstandard_style = "warn"
-future_incompatible = "warn"
+nonstandard_style = { level = "warn", priority = -1 }
+future_incompatible = { level = "warn", priority = -1 }
 missing_docs = "warn"
-unused = { priority = -1, level = "warn" }
-rust_2018_idioms = { priority = -1, level = "warn" }
-rust_2024_compatibility = "warn"
+unused = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2024_compatibility = { level = "warn", priority = -1 }
 array_into_iter = "warn"
 bare_trait_objects = "warn"
 ellipsis_inclusive_range_patterns = "warn"

@@ -180,7 +180,7 @@ impl ProcessState {
   }
 }
 
-#[must_use]
+#[cfg_attr(not(windows), expect(clippy::unnecessary_wraps))]
 fn is_hidden(path: &Path) -> io::Result<bool> {
   #[cfg(windows)]
   {
@@ -197,8 +197,7 @@ fn is_hidden(path: &Path) -> io::Result<bool> {
       path
         .file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with('.'))
-        .unwrap_or(false),
+        .is_some_and(|n| n.starts_with('.')),
     )
   }
 }
@@ -336,7 +335,7 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
             "Processing directory",
           );
         } else if file_type.is_file() {
-          check_file(&path, &process_state);
+          check_file(&path, process_state);
         } else {
           process_state
             .stat_files_skipped
@@ -918,12 +917,12 @@ fn main() -> anyhow::Result<()> {
         return Some(file_path);
       }
 
-      if is_excluded(&file_path, &process_state.excluded_files) {
+      if is_excluded(file_path, &process_state.excluded_files) {
         process_state
           .stat_files_skipped
           .fetch_add(1, Ordering::Relaxed);
       } else {
-        check_file(&file_path, &process_state);
+        check_file(file_path, &process_state);
       }
 
       None

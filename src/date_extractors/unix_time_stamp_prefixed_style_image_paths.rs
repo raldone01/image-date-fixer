@@ -7,7 +7,7 @@ use super::{ConfidentNaiveDateTime, DateConfidence};
 
 /// Extracts the date from unix timestamp prefixed image file paths.
 /// Example file paths:
-///   * /storage/emulated/0/DCIM/Camera/1624280370243_postfix.jpg
+///   * `/storage/emulated/0/DCIM/Camera/1624280370243_postfix.jpg`
 pub fn get_date_from_unix_timestamp_prefixed_filepath_regex(
   _file_path: &Path,
   file_name: &str,
