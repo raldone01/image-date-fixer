@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add support for color mode configuration.
+
 ## [0.2.3] - 2026-10-19
 
 - Fix double logging exiftool errors.

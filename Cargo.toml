@@ -8,7 +8,6 @@ option_if_let_else = "allow"
 # see: https://github.com/bevyengine/bevy/pull/15375#issuecomment-2366966219
 too_long_first_doc_paragraph = "allow"
 missing_panics_doc = "allow"
-doc-markdown = "allow"
 
 nursery = { priority = -1, level = "warn" }
 pedantic = { priority = -1, level = "warn" }
@@ -31,18 +30,18 @@ std_instead_of_alloc = "warn"
 alloc_instead_of_core = "warn"
 
 [workspace.lints.rust]
-nonstandard-style = "warn"
-future-incompatible = "warn"
+nonstandard_style = "warn"
+future_incompatible = "warn"
 missing_docs = "warn"
 unused = { priority = -1, level = "warn" }
 rust_2018_idioms = { priority = -1, level = "warn" }
-rust-2024-compatibility = "warn"
-array-into-iter = "warn"
-bare-trait-objects = "warn"
-ellipsis-inclusive-range-patterns = "warn"
-non-fmt-panics = "warn"
-explicit-outlives-requirements = "warn"
-unused-extern-crates = "warn"
+rust_2024_compatibility = "warn"
+array_into_iter = "warn"
+bare_trait_objects = "warn"
+ellipsis_inclusive_range_patterns = "warn"
+non_fmt_panics = "warn"
+explicit_outlives_requirements = "warn"
+unused_extern_crates = "warn"
 unexpected_cfgs = { level = "warn" }
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "warn"
@@ -106,8 +105,9 @@ tracing = { version = "0.1", default-features = false, features = [
   "attributes", # No idea what this changes. It is not required.
 ] }
 tracing-subscriber = { version = "0.3", default-features = false, features = [
-  "env-filter",
-  "fmt",
+  "ansi",       # for color formatting
+  "env-filter", # for env filtering
+  "fmt",        # for formatting
   "smallvec",   # No idea what this changes. It is not required.
   "std",        # No idea what this changes. It is not required.
 ] }

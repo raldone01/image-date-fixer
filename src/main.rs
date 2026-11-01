@@ -33,7 +33,10 @@ use exiftool::{
   wrap_with_exiftool_repair,
 };
 
-use crate::{errors::ErrorWithFilePath, logging::setup_logging};
+use crate::{
+  errors::ErrorWithFilePath,
+  logging::{ColorMode, setup_logging},
+};
 
 fn set_modified_time(
   file_path: &Path,
@@ -655,6 +658,13 @@ fn new_argparser() -> clap::Command {
     .value_parser(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
   )
   .arg(
+    Arg::new("color")
+      .long("color")
+      .value_name("when")
+      .value_parser(["always", "auto", "never"])
+      .default_value("auto"),
+  )
+  .arg(
     Arg::new("fix-future-modified-times")
     .long("fix-future-modified-times")
     .help("Fix modified times that are this many days in the future")
@@ -709,11 +719,18 @@ fn new_argparser() -> clap::Command {
 fn main() -> anyhow::Result<()> {
   let matches = new_argparser().get_matches();
 
+  let color_mode = matches
+    .get_one::<String>("color")
+    .map(|color_mode| {
+      ColorMode::from_str(color_mode).expect("Clap should only accept valid color modes")
+    })
+    .unwrap_or_default();
+
   // set the correct log level
   let log_level = matches
     .get_one::<String>("log-level")
     .and_then(|level| Level::from_str(level).ok());
-  setup_logging(log_level);
+  setup_logging(log_level, color_mode);
 
   let flagged_files = matches
     .get_many::<PathBuf>("flagged_files")
