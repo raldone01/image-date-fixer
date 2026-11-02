@@ -182,9 +182,10 @@ impl ProcessState {
 }
 
 #[cfg_attr(not(windows), expect(clippy::unnecessary_wraps))]
-fn is_hidden(path: &Path) -> io::Result<bool> {
+fn is_hidden(entry: &dua_core::Entry) -> io::Result<bool> {
   // Unix convention: a leading dot in the file name (honored on all platforms)
-  let is_dotfile = path
+  let is_dotfile = entry
+    .path()
     .file_name()
     .and_then(|n| n.to_str())
     .is_some_and(|n| n.starts_with('.'));
@@ -197,7 +198,11 @@ fn is_hidden(path: &Path) -> io::Result<bool> {
   {
     use std::{fs, os::windows::fs::MetadataExt};
     const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-    let meta = fs::metadata(path)?;
+
+    /*BLOCKED ON NEXT DUA CORE RELEASE if let Some(meta) = entry.metadata.transpose()? {
+      Ok(meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+    }*/
+    let meta = fs::metadata(entry.path())?;
     Ok(meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
   }
 
@@ -241,7 +246,7 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
         }
 
         if process_state.skip_hidden_files {
-          let is_hidden = match is_hidden(&entry.path()) {
+          let is_hidden = match is_hidden(entry) {
             Ok(is_hidden) => is_hidden,
             Err(io_error) => {
               process_state
@@ -300,7 +305,7 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
         let entry = match entry_result {
           Ok(entry) => entry,
           Err(e) => {
-            /*let file_path = e.path().map_or_else(
+            /*BLOCKED ON NEXT DUA CORE RELEASE let file_path = e.path().map_or_else(
               // TODO: https://github.com/Byron/dua-cli/issues/421 can't migrate this from jwalk
               || "Unknown path".to_string(),
               |path_option| path_option.display().to_string(),
