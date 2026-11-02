@@ -183,6 +183,16 @@ impl ProcessState {
 
 #[cfg_attr(not(windows), expect(clippy::unnecessary_wraps))]
 fn is_hidden(path: &Path) -> io::Result<bool> {
+  // Unix convention: a leading dot in the file name (honored on all platforms)
+  let is_dotfile = path
+    .file_name()
+    .and_then(|n| n.to_str())
+    .is_some_and(|n| n.starts_with('.'));
+
+  if is_dotfile {
+    return Ok(true);
+  }
+
   #[cfg(windows)]
   {
     use std::{fs, os::windows::fs::MetadataExt};
@@ -193,13 +203,7 @@ fn is_hidden(path: &Path) -> io::Result<bool> {
 
   #[cfg(not(windows))]
   {
-    // Unix convention: a leading dot in the file name
-    Ok(
-      path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with('.')),
-    )
+    Ok(false)
   }
 }
 
