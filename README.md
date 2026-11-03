@@ -56,7 +56,7 @@ In particular, we are interested in:
 - Fixing more clippy warnings.
 - Switching to bindings for `libexif` or other exif libraries.
 - Support more parent directory levels.
-- Support asking ollama for a smarter date resolution powered by ai.
+- Support asking llms for a smarter date resolution powered by ai, maybe even with vision.
 
 Your contributions help make `image-date-fixer` more robust and useful for everyone!
 
