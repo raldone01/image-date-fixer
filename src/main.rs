@@ -181,6 +181,29 @@ impl ProcessState {
   }
 }
 
+#[cfg(windows)]
+#[must_use]
+fn clone_io_error(e: &io::Error) -> io::Error {
+  // OS errors can be reconstructed exactly (kind + message come from the code).
+  if let Some(code) = e.raw_os_error() {
+    return io::Error::from_raw_os_error(code);
+  }
+  match e.get_ref() {
+    // Custom error: keep the kind and carry over the inner error's message.
+    Some(inner) => io::Error::new(e.kind(), inner.to_string()),
+    // Simple error (kind only, no payload).
+    None => io::Error::from(e.kind()),
+  }
+}
+
+#[cfg(windows)]
+fn clone_io_result<T: Clone>(r: &Result<T, io::Error>) -> Result<T, io::Error> {
+  match r {
+    Ok(v) => Ok(v.clone()),
+    Err(e) => Err(clone_io_error(e)),
+  }
+}
+
 #[cfg_attr(not(windows), expect(clippy::unnecessary_wraps))]
 fn is_hidden(entry: &dua_core::Entry) -> io::Result<bool> {
   // Unix convention: a leading dot in the file name (honored on all platforms)
@@ -196,20 +219,14 @@ fn is_hidden(entry: &dua_core::Entry) -> io::Result<bool> {
 
   #[cfg(windows)]
   {
-    use std::{fs, os::windows::fs::MetadataExt};
-    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    use dua_core::FileAttributes;
 
-    /*BLOCKED ON NEXT DUA CORE RELEASE if let Some(meta) = entry.metadata.transpose()? {
-      Ok(meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
-    }*/
-    let meta = fs::metadata(entry.path())?;
-    Ok(meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+    if let Some(meta) = entry.metadata.as_ref().map(clone_io_result).transpose()? {
+      return Ok(meta.file_attributes().contains(FileAttributes::HIDDEN));
+    }
   }
 
-  #[cfg(not(windows))]
-  {
-    Ok(false)
-  }
+  Ok(false)
 }
 
 /// A marker type used to indicate that an operation should be cancelled.
@@ -305,19 +322,9 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
         let entry = match entry_result {
           Ok(entry) => entry,
           Err(e) => {
-            /*BLOCKED ON NEXT DUA CORE RELEASE let file_path = e.path().map_or_else(
-              // TODO: https://github.com/Byron/dua-cli/issues/421 can't migrate this from jwalk
-              || "Unknown path".to_string(),
-              |path_option| path_option.display().to_string(),
-            );
             error!(
-              file_path = %file_path,
-              source = %e,
-              "Failed to read file entry while processing directory",
-            );*/
-            error!(
-              file_path = %root_dir.display(),
-              source = %e,
+              file_path = %e.path().unwrap_or(root_dir).display(),
+              source = %e.io_error(),
               "Failed to read file entry while processing directory",
             );
             process_state
@@ -359,13 +366,6 @@ fn check_root_dirs_recursive<P: AsRef<Path> + Sync>(
               "Skipping symbolic link",
             );
           } else {
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            warn!(
-                file_path = %path.display(),
-                "Skipping non-file entry",
-            );
-
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             warn!(
                 file_path = %path.display(),
                 "Skipping non-file entry: {:#?}",
